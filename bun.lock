@@ -1,0 +1,21 @@
+{
+  "lockfileVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "gjp-cli",
+      "dependencies": {
+        "citty": "^0.2.2",
+        "tough-cookie": "^6.0.1",
+      },
+    },
+  },
+  "packages": {
+    "citty": ["citty@0.2.2", "https://registry.npmmirror.com/citty/-/citty-0.2.2.tgz", {}, "sha512-+6vJA3L98yv+IdfKGZHBNiGW5KHn22e/JwID0Strsz8h4S/csAu/OuICwxrg44k5MRiZHWIo8XXuJgQTriRP4w=="],
+
+    "tldts": ["tldts@7.4.3", "https://registry.npmmirror.com/tldts/-/tldts-7.4.3.tgz", { "dependencies": { "tldts-core": "^7.4.3" }, "bin": { "tldts": "bin/cli.js" } }, "sha512-A3BDQBeeukYPzB4QdQ1DtdlUmp4x2OCH8n5UVhEWbyANxNep8GavottKzd1xYKFJKjUgMyPT7EzOfnBO55s8Sg=="],
+
+    "tldts-core": ["tldts-core@7.4.3", "https://registry.npmmirror.com/tldts-core/-/tldts-core-7.4.3.tgz", {}, "sha512-27ep5H9PzdBrNd5OFM/j3WCU8F3kPwM9D0BOaOf7uYfxMJfyr0K5Tjj69Gri+sZlh2WXd5buIm47NuPF29CDiw=="],
+
+    "tough-cookie": ["tough-cookie@6.0.1", "https://registry.npmmirror.com/tough-cookie/-/tough-cookie-6.0.1.tgz", { "dependencies": { "tldts": "^7.0.5" } }, "sha512-LktZQb3IeoUWB9lqR5EWTHgW/VTITCXg4D21M+lvybRVdylLrRMnqaIONLVb5mav8vM19m44HIcGq4qASeu2Qw=="],
+  }
+}

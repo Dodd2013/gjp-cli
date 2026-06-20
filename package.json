@@ -1,0 +1,13 @@
+{
+  "name": "gjp-cli",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "login": "bun run src/auth/test-login.ts",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "citty": "^0.2.2",
+    "tough-cookie": "^6.0.1"
+  }
+}
