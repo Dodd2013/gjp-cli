@@ -1,7 +1,7 @@
 ---
 name: gjp
-description: 通过 gjp CLI 操作网上管家婆（wsgjp）进销存系统——开销售/采购单、查库存、管商品、管客户/供应商、查报表等。
-  当用户提到「管家婆」「进销存」「开单/开销售单/开采购单」「查库存」「新增商品/建商品」「客户/供应商/往来单位」「出入库」「gjp」等，需要在该系统里做操作时使用。
+description: 通过 gjp CLI 操作网上管家婆（wsgjp）进销存系统——开销售/采购单、查库存、管商品、管客户/供应商、单据中心查历史单据、查报表等。
+  当用户提到「管家婆」「进销存」「开单/开销售单/开采购单」「查库存」「新增商品/建商品」「客户/供应商/往来单位」「查单据/单据中心/历史单据」「出入库」「gjp」等，需要在该系统里做操作时使用。
   前置：需已安装 gjp CLI 并执行 gjp auth login。所有命令默认输出 JSON。
 ---
 
@@ -195,6 +195,58 @@ gjp purchase delete --bill <CR-单号 或 vchcode> [--force] [--yes]
 - 输出：`{success, deleted, billNumber, vchcode}`（强制删时多 `forced:true`）。
 
 > ⚠️ 删除是不可逆操作且影响库存/应付。仅能删已过账（postState=800）单据。草稿态单据需在网页端处理。
+
+### 开采购退货单（货退回供应商）
+
+采购入库单的**逆向流程**：参数结构与 `purchase create` 一致，但生成 `CT-` 退货单、扣减库存。
+
+```bash
+gjp purchase return \
+  -w <仓库名> \              # 可选，默认第一个仓库
+  -s <供应商名> \             # 必填
+  --items '<JSON明细>' \      # 必填，每项 {name, qty, price}（price 为退货单价）
+  [--memo 备注] \
+  [--date YYYY-MM-DD] \       # 默认今天
+  [--force]                   # confirm:true，绕过「价格为0」等需确认异常
+```
+
+```bash
+gjp purchase return -s 光明批发 \
+  --items '[{"name":"可口可乐","qty":2,"price":2.8}]'
+```
+
+**输出**：`{success, billNumber, vchcode, total, needsConfirm, exceptions}`，单据号前缀 `CT-`。
+
+**异常处理**（与 `purchase create` 相同）：`needsConfirm:true` 且 `exceptions` 含 `COST_BATCH_ERROR`（价格为0）时，加 `--force` 置 `confirm:true` 重提即落库。
+
+> ⚠️ 退货会扣减库存、产生应付红冲。优先 `--dry-run` 先核对解析出的商品/数量。CLI 暂无退货单删除命令，调试用的测试退货单需在网页端处理。
+
+## 单据中心（bill）
+
+跨单据类型查历史单据、查业务类型枚举。
+
+### 查单据列表
+```bash
+gjp bill list \
+  [--from YYYY-MM-DD] [--to YYYY-MM-DD] \   # 默认近 7 天
+  [-t purchase|sale|stock|finance|all] \    # 默认 all
+  [--party <对方单位名>] [--bill <单据号>] \  # 对方/精确单号过滤
+  [-n <条数>]                                # 默认 20
+```
+例：
+```bash
+gjp bill list                       # 近 7 天所有单据
+gjp bill list -t sale -n 10         # 仅销售单
+gjp bill list --party 唱起一上       # 某客户的单据
+gjp bill list --bill CR-20260620-00001   # 精确查一张（返回 vchcode，可衔接 purchase delete）
+```
+**输出**：`{total, list:[{billNumber, vchcode, vchtype, businessType, businessTypeName, billType, bfullname, currencyBillTotal, billDate, postTime, memo, summary}]}`。
+
+### 查业务类型枚举（vchtype 字典）
+```bash
+gjp bill types [--all]    # 默认排除已停用；--all 含全部
+```
+**输出**：`[{vchtype, name, businessType, businessCode, businessTypeEnum, stoppedInVchtype}]`。用于查「某个 businessType 对应什么单据」「某类单据的 vchtype 码」。
 
 ## 报表（report）
 

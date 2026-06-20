@@ -30,10 +30,12 @@ gjp-cli/
 │   ├── crypto/        rsa.ts(RSA加密) · jwt.ts(解码exp)
 │   ├── http/          cookieJar.ts(fetch+会话+序列化)
 │   ├── auth/          login.ts(登录+getAuthenticatedClient) · test-login.ts(参考)
+│   ├── api/           client.ts(JxcClient：/jxc 调用 + 名称→ID 解析)
 │   ├── store/         paths.ts · credentials.ts(0600) · session.ts(持久化+过期检测)
-│   ├── modules/       ← 业务模块（按 HAR 逐步新增）：stock.ts purchase.ts sales.ts ...
-│   ├── cli.ts         ← citty 入口，命令挂这里
-│   └── prompt.ts      掩码密码输入
+│   ├── modules/       ← 业务逻辑层（按 HAR 逐步新增）：sales.ts purchase.ts product.ts customer.ts · templates/*.json
+│   ├── commands/      ← CLI 命令层（参数解析+调用模块+输出）：auth/sales/purchase/product/customer.ts · shared.ts(output/die/parseItems/parseIds)
+│   ├── cli.ts         ← citty 入口，仅装配命令树（import 5 个 group + runMain）
+│   └── prompt.ts      readPassword(掩码) · readConfirm(y/N 二次确认)
 ├── docs/
 │   ├── API.md         ← 所有业务接口文档（HAR 提炼，持续扩充）
 │   └── implementation-plan.html  方案网页
@@ -104,9 +106,9 @@ export async function doSomething() {
 }
 ```
 
-**命令注册**：在 `src/cli.ts` 的 `main.subCommands` 下加 `<module>` 子命令组，挂 action 命令。
+**命令注册**：在 `src/commands/<module>.ts` 里用 `defineCommand` 定义各 action 命令 + 导出 `<module>Group`，再到 `src/cli.ts` 的 `main.subCommands` 挂上该 group。命令层只做「参数解析 + 调用 `src/modules/` + 输出」，复用 `src/commands/shared.ts` 的 `output/die/parseItems/parseIds`（不要在命令里直接 `console.log(JSON.stringify(...))` 或 `console.error+process.exit`）。
 
-**输出约定**：业务命令**默认输出 JSON**（便于 AI 解析）。人类可读信息用 `--human` 或单独命令。
+**输出约定**：业务命令**默认输出 JSON**（统一走 `output()`，便于 AI 解析）。人类可读信息用 `--human` 或单独命令。
 
 **写接口的异常处理**：保存类接口可能返回 `resultType: "CONFIRM"`（如 `NEG_STOCK_ERROR` 库存不足），需带确认标记重提。封装时先返回异常让调用方决策，或支持 `--force` 自动确认。
 
@@ -179,7 +181,23 @@ cd docs && python3 -m http.server 8848      # http://localhost:8848/implementati
   - 与销售同构：`getBillByVchcode{vchtype:"Buy"}` 取模板（含 payment 付款账户），填 inDetail → submitBill
   - 🔑 **CONFIRM 机制不同**：采购的需确认异常（如 `COST_BATCH_ERROR 价格为0`）靠 body 里 **`confirm:true`** 重提解除（销售是 `needValidation:false`+`failedSaveUnconfirmed`+`allowZeroQty`）。`--force` 即置 confirm:true，明细可不变
   - 模板：`src/modules/templates/purchase-indetail-line.json`（196 字段，与 outDetail 共享约 192 字段，差异在 in/outPosition 库位字段）
-- ⬜ 待补 HAR 样例：库存盘点 / 报表 / 财务 / 单据列表查询
+- ✅ **业务命令 `purchase delete`**（来自 `采购单据删除.har` / `采购单据删除2.har`）—— **实测通过**（NEG_STOCK_ERROR 检测 + `--force`(confirm:true) 删除均验过，正常路径 HAR 证明）
+  - 接口 `recordsheet/billCore/deleteBill`，body `{vchcode, vchtype:"Buy", businessType:"Buy", billDate, billPostState, confirm?}`
+  - billDate/billPostState 来自 `billCore/list{postStateList:[800]}`（⚠️ postStateList 只接受**单个**值；800=已过账；删单只针对已过账单）
+  - 正常 → `data.success:true`；删后库存<0 → `success:false, result:"ALLOW", errorDetail:[NEG_STOCK_ERROR/CONFIRM]` → `confirm:true` 重提删除
+  - **二次确认**：命令默认交互 `y/N` 提示（非 TTY 需 `--yes`）；负库存强制删（`--force`）再确认一次。`src/prompt.ts` 加了 `readConfirm`
+- ✅ **业务命令 `purchase return`**（来自 `采购退货单.har`）—— **实测通过**（happy path 建单 `CT-...` + price=0 的 `COST_BATCH_ERROR`/CONFIRM 检测 + `--force`(confirm:true) 落库均验过）
+  - 采购入库单的**逆向流程**：`vchtype:"BuyBack"`、`intVchtype:1100`、单据号前缀 **`CT-`**（入库是 `Buy`/1000/`CR-`），`businessType:"Buy"`、btype=供应商 不变
+  - 🔑 **明细用 `outDetail`（退货=货出仓），不是 inDetail**；模板 `getBillByVchcode{vchtype:"BuyBack",copyTypeEnum:DEFAULT}` 取，其余（btype=供应商、`confirm:true` 解除 CONFIRM、saveModel）与入库完全一致
+  - 实现镜像 `src/modules/purchase.ts`：`src/modules/purchasereturn.ts` + `src/commands/purchase.ts` 加 `return` 子命令 + 模板 `src/modules/templates/purchasereturn-outdetail-line.json`（196 字段 HAR 真实行）
+  - 响应 `outDetailIds:{"0":...}` 印证走 outDetail；`resultType:"SUCCESS"`、`postState:800`
+- ✅ **业务命令 `bill list` / `bill types`**（来自 `单据中心.har`）—— **实测通过**（跨类型查单据 + 业务类型枚举 + type/party/billNumber 过滤均验过）
+  - `postBill/listPostBill`：单据中心跨类型查询，`queryParams:{beginDate,endDate,vchtypes:[...],btypeId,billNumbers,...}`。vchtypes 按千位分组（1xxx采购/2xxx销售/3xxx库存/4xxx财务/9802其它）。结果含 `vchcode` 可衔接 `purchase delete`
+  - `accBusinessType/list {vchtypeEnum:null,query:true}`：**全量业务类型枚举**（即 vchtype 字典，businessType↔name↔vchtype）。之前各模块只查了单一 vchtypeEnum（Sale/Buy/BuyBack）
+  - `OrderSaleMode/list`：销售方式枚举（1普通/2车销/...，对应 saleModeList）
+  - 注意：accBusinessType 里的 `vchtype` 字段编号（9001/9005 等）与 listPostBill 的 `vchtypes`（2000/3000 等）**两套编号**，可靠的 key 是 `businessType`/`businessCode`/`name`；结果里 `businessTypeName` 自描述
+  - 新增 `client.ts: resolveBtype`（不限客户/供应商，单据中心按对方查用）
+- ⬜ 待补 HAR 样例：库存盘点 / 报表 / 财务
 
 ## 安全说明
 

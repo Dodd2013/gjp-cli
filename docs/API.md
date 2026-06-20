@@ -32,15 +32,33 @@
 
 ### 0.3 关键枚举
 
-**vchtype（单据类型）** — 贯穿几乎所有单据接口：
+**vchtype 数字码（单据中心 `postBill/listPostBill` 的 `vchtypes` 过滤值）**，按千位归类：
 
-| vchtype | intVchtype | businessType | 含义 |
-|---------|-----------|--------------|------|
-| `Sale` | 2000 | `SaleNormal` / `SaleDistribution` | 销售出库 |
-| `Buy` | 1000 | `Buy` | 采购入库（单据号前缀 `CR-`） |
-| `GoodsTrans` | 3000 | `GoodsTrans` | 调拨/其它出入库 |
-| `SaleReturn` | — | — | 销售退货 |
-| `PurchaseReturn` | — | — | 采购退货 |
+| 分组 | vchtype 码 | 含义 | 单据号前缀示例 |
+|------|-----------|------|--------------|
+| 采购 | 1000 / 1100 / 1200 | 采购入库/采购退货(BuyBack)等 | `CR-`(入库) · `CT-`(退货) |
+| 销售 | 2000 / 2100 / 2200 | 销售/退货等 | `PXX-` |
+| 库存 | 3000 / 3100 / 3200 / 3300~3303 | 调拨/调价/组装/报损报溢/其它出入库 | `SK-` 等 |
+| 财务 | 4000~4010 / 4014 / 4017 | 收付款/费用/固定资产等 | — |
+| 其它 | 9802 | 普通业务 | — |
+
+> 单据中心查询传 `vchtypes:[...]`（数组，可多值）。`gjp bill list --type purchase|sale|stock|finance|all` 即按上述分组展开。
+
+**businessType（业务类型，细于 vchtype）** — 来自 `accBusinessType/list`（全量枚举接口，见 4.1）：
+
+| businessType | businessCode | 名称 |
+|--------------|--------------|------|
+| `Buy` | 100 | 采购业务 |
+| `BuyBack` | 101 | 采购退货 |
+| `SaleNormal` | 201 | 普通销售 |
+| `SaleDistribution` | 203 | 分销业务 |
+| `GoodsTrans` | 300 | 普通调拨 |
+| `StockPriceAdjust` | 303 | 普通调价 |
+| `StockLoss` / `StockOverflow` | 305 / 306 | 报损 / 报溢 |
+| `PaymentNormal` | 420 | 付款（普通） |
+| `ReceiveAdvance` | 421 | 预收 |
+
+> submitBill/getBillByVchcode 用字符串名（如 `"Buy"`/`"SaleNormal"`）；listPostBill 结果里同时有数字 `businessType`(=businessCode) 和 `businessTypeName`。
 
 **billDeliverType（发货方式）**: `DELIVER_BY_LOGISTICS`（物流发货）等。
 
@@ -237,11 +255,15 @@ HAR 样例：`默认仓库` → id `1265029598679457792`。
 ### 4.1 业务类型列表 `POST /jxc/recordsheet/accBusinessType/list` ★
 
 ```jsonc
+// 单一 vchtype 的业务类型
 { "vchtypeEnum": "Sale", "intVchtypeList": null, "query": true }
+// 全量枚举（vchtype 字典，CLI `gjp bill types` 用）
+{ "vchtypeEnum": null, "intVchtypeList": null, "query": true }
 ```
 
-响应 `data[]`：`{vchtype, name, businessType, businessCode, businessTypeEnum}`。
-样例：`普通销售/SaleNormal`、`分销业务/SaleDistribution`。
+响应 `data[]`：`{vchtype, name, businessType, businessCode, businessTypeEnum, stoppedInVchtype}`。
+`vchtypeEnum:null` 返回**所有 vchtype** 的业务类型（即 vchtype/businessType 完整字典）。
+样例：`普通销售/SaleNormal(201)`、`采购业务/Buy(100)`、`付款/PaymentNormal(420)`。
 
 ### 4.2 按单号查单据 `POST /jxc/recordsheet/goodsBill/getBillByVchcode` ★
 
@@ -758,6 +780,112 @@ recordsheet/       accBusinessType/list, basePtypeUnit/findFirstPtypeFullbarcode
 2. billCore/deleteBill (confirm:false)   → 删后库存<0 → NEG_STOCK_ERROR / CONFIRM
 3. (用户确认负库存影响) billCore/deleteBill (confirm:true) → SUCCESS 落库删除
 ```
+
+
+## 10. 采购退货单模块（来自 采购退货单.har）
+
+采购入库单（§9）的**逆向流程**：把已入库的商品退回供应商（货出库）。复用 `goodsBill/submitBill`，差异：
+
+| 项 | 采购入库（Buy） | 采购退货（BuyBack） |
+|----|------------|------------|
+| `vchtype` / `businessType` | `Buy` / `Buy` | **`BuyBack`** / `Buy` |
+| `intVchtype` | 1000 | **1100** |
+| 单据号前缀 | `CR-` | **`CT-`** |
+| 明细字段 | `inDetail`（入库） | **`outDetail`**（出库，退货=货出仓） |
+| btype | 供应商（`resolveSupplier`） | 供应商（同） |
+| 模板 | `getBillByVchcode{vchtype:"Buy"}` | **`{vchtype:"BuyBack"}`** |
+| CONFIRM 解除 | `confirm:true` | `confirm:true`（同） |
+
+> 即：把入库单的 `vchtype: Buy→BuyBack`、明细 `inDetail→outDetail`，其余（btype=供应商、confirm 机制、模板获取）与入库完全一致。
+
+### 10.1 采购退货单结构 `POST /jxc/recordsheet/goodsBill/submitBill` ★★★
+
+关键字段（仅列差异点，其余同 §9.1）：
+
+```jsonc
+{
+  "vchtype": "BuyBack", "businessType": "Buy", "intVchtype": 1100,
+  "number": "CT-20260620-00002",
+  "ktypeId": "1265029598679457792",      // 仓库
+  "btypeId": "1904594932357963155",      // 供应商
+  "bfullname": "供应商1111",
+  "currencyBillTotal": "4",
+  "inDetail": [],
+  "outDetail": [ /* 退货明细，196 字段/行，模板见 purchasereturn-outdetail-line.json */ ],
+  "payment": [{ ... }],                  // 退款账户+金额（模板自带）
+  "saveModel": "SAVE_NEW",
+  "needValidation": true,
+  "confirm": false                       // ★ 同入库，COST_BATCH_ERROR 等靠 confirm:true 解除
+}
+```
+
+`outDetail` 每行关键字段：`ptypeId`/`skuId`/`unitId`/`pFullName`/`unitQty`/`currencyPrice`(退货单价)/`currencyTotal`/`currencyDisedPrice`/`ktypeId`。
+> 成本（`costPrice`/`costTotal`）由服务端按库存现值回填，构造明细时只需覆盖 `currencyPrice` 等退货价字段。`estimateProfit` 留总值让服务端订正（同入库处理）。
+
+**响应**：`resultType:"SUCCESS"`、`postState:800`（已过账）、`outDetailIds:{"0":"..."}`（注意是 outDetailIds，印证用的是 outDetail）。
+
+### 10.2 CONFIRM 异常处理
+
+与采购入库（§9.2）**完全一致**：价格为 0 → `COST_BATCH_ERROR` → `resultType:"CONFIRM"` → body 置 `confirm:true` 重提即落库。CLI `gjp purchase return --force` 即置 `confirm:true`。
+
+| 提交 | `confirm` | 响应 resultType |
+|------|----------|----------------|
+| 第1次（price=0） | `false` | `CONFIRM`（exceptionInfo: COST_BATCH_ERROR 下列商品价格为0） |
+| 第2次（--force） | `true` | `SUCCESS` |
+
+### 10.3 业务流程示例：创建采购退货单
+
+```
+1. accBusinessType/list {vchtypeEnum:"Buy"}  → 业务类型 Buy
+2. goodsBill/getBillByVchcode {vchtype:"BuyBack",copyTypeEnum:DEFAULT}  → 取模板(含 vchcode+number+payment)
+3. btype/list {bcategory:1}                   → 选供应商
+4. ktype/pagelist                              → 选仓库
+5. ptype/getBatchPtypeSku + getStockQty        → 每个商品取 SKU/库存
+6. goodsBill/submitBill (confirm:false)        → 填 outDetail 保存；COST_BATCH_ERROR → CONFIRM
+7. goodsBill/submitBill (confirm:true)         → 确认落库 → SUCCESS（CT-...）
+```
+
+---
+
+## N. 单据中心模块（来自 单据中心.har）
+
+跨单据类型的查询入口（区别于 `billCore/list` 那种模块内查询）。
+
+### N.1 单据中心查询 `POST /jxc/recordsheet/postBill/listPostBill` ★★
+
+```jsonc
+{
+  "pageIndex": 1, "pageSize": 22,
+  "queryParams": {
+    "beginDate": "2026-06-14 00:00:00",       // 必填，"YYYY-MM-DD HH:mm:ss"
+    "endDate":   "2026-06-20 23:59:59",
+    "vchtypes": [1000,1100,1200,2000,...],     // 见 §0.3，按类型过滤；传全量=所有类型
+    "saleModeList": [],                        // OrderSaleMode：1普通/2车销/3巡店/4委托/5网店/6门店
+    "btypeId": "",                             // 对方单位 ID
+    "ptypeId": "",                             // 商品 ID
+    "etypeIds": [], "createEtypeIds": [],      // 业务员 / 制单人
+    "ktypeId": "", "otypeIds": [],             // 仓库 / 部门
+    "redbillState": -1,                        // -1=全部
+    "queryStockBillTotal": false,
+    "billNumbers": [],                         // 精确单据号数组
+    "summary": "", "memo": "", "sourceNumber": "",
+    "sorts": null
+  }
+}
+```
+
+响应 `data.list[]`（精简关键字段）：`billNumber`、`vchcode`、`vchtype`、`businessType`(=businessCode)、`businessTypeName`、`billType`(10采购/20销售/40收付款…)、`bfullname`(对方)、`btypeId`、`currencyBillTotal`、`billDate`、`postTime`、`memo`/`summary`、`kfullname`、`redbillState`、`sourceNumber`。`data.total` 为总数。
+
+> CLI：`gjp bill list [--from --to --type --party --bill --size]`。结果含 `vchcode`，可衔接 `gjp purchase delete --bill <vchcode>`。
+
+### N.2 业务类型枚举（vchtype 字典）`POST /jxc/recordsheet/accBusinessType/list`
+
+详见 §4.1。`{vchtypeEnum:null, query:true}` 返回**全量**业务类型（`businessType`↔名称↔`vchtype`），即 vchtype 枚举接口。
+CLI：`gjp bill types [--all]`（默认排除 `stoppedInVchtype:true`）。
+
+### N.3 销售方式枚举 `POST /jxc/recordsheet/OrderSaleMode/list`
+
+请求体空 `{}`。响应 `data[]`：`{modeName, modeCode}`（1普通销售/2车销销售/3巡店销售/4委托销售/5网店销售/6门店销售）。对应 listPostBill 的 `saleModeList`。
 
 
 

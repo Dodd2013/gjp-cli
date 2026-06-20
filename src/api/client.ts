@@ -121,6 +121,23 @@ export class JxcClient {
     return { id: picked.id, name: picked.fullname ?? picked.name ?? "" };
   }
 
+  /** 往来单位名 → {id, name}（不限客户/供应商，单据中心按对方查用） */
+  async resolveBtype(name: string): Promise<{ id: string; name: string }> {
+    const data = await this.call<{ list: { id: string; fullname?: string; name?: string }[] }>(
+      "baseinfo/btype/list",
+      {
+        refresh: true,
+        queryParams: { filterkey: "quick", filtervalue: name, partypeid: "00000", btypetype: "nofreight", priceLevel: null, stoped: null, hasClass: true, queryBcategoryList: [0, 1, 3], ignoreDeliveryinfo: true },
+        pageSize: 20, pageIndex: 1,
+      },
+    );
+    const list = data.list ?? [];
+    const exact = list.find((b) => (b.fullname ?? b.name) === name);
+    const picked = exact ?? list[0];
+    if (!picked) throw new ApiError(`未找到往来单位"${name}"`, "NOT_FOUND");
+    return { id: picked.id, name: picked.fullname ?? picked.name ?? "" };
+  }
+
   /** 商品名 → ptypeId（在指定仓库范围内搜索） */
   async resolveProduct(name: string, warehouseId?: string): Promise<{ id: string; fullname: string; usercode: string }> {
     const data = await this.call<{ list: { id: string; fullname: string; usercode: string; shortname?: string }[] }>(
