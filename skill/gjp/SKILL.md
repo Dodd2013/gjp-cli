@@ -183,6 +183,19 @@ gjp purchase create -s 光明批发 \
 gjp purchase create -s 光明批发 --items '[{"name":"可口可乐","qty":1,"price":2.8}]' --dry-run
 ```
 
+### 删除采购入库单
+
+```bash
+gjp purchase delete --bill <CR-单号 或 vchcode> [--force] [--yes]
+```
+
+- **二次确认**：默认会列出单据（单号/供应商/金额/日期）并提示 `确认删除? (y/N)`；非交互环境（AI/脚本）须加 `--yes` 显式确认。
+- **负库存保护**：若删除会导致库存为负（`NEG_STOCK_ERROR`），会打印受影响商品（当前库存 → 删除后）并要求 `--force` 才能继续；`--force` 还会再确认一次。
+- 例：`gjp purchase delete --bill CR-20260620-00008 --yes`
+- 输出：`{success, deleted, billNumber, vchcode}`（强制删时多 `forced:true`）。
+
+> ⚠️ 删除是不可逆操作且影响库存/应付。仅能删已过账（postState=800）单据。草稿态单据需在网页端处理。
+
 ## 报表（report）
 
 > 待实现。进销存报表、利润报表等。

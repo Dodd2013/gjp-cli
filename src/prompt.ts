@@ -1,6 +1,21 @@
 import readline from "node:readline";
 import { stdin, stdout } from "node:process";
 
+/** y/N 确认（默认否）。非交互终端(无 TTY)直接返回 false，调用方应改用 --yes。 */
+export function readConfirm(question: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (!stdin.isTTY) {
+      resolve(false);
+      return;
+    }
+    const rl = readline.createInterface({ input: stdin, output: stdout });
+    rl.question(question, (ans) => {
+      rl.close();
+      resolve(ans.trim().toLowerCase().startsWith("y"));
+    });
+  });
+}
+
 /** 隐藏输入的密码读取（raw 模式关闭回显） */
 export function readPassword(question: string): Promise<string> {
   return new Promise((resolve) => {

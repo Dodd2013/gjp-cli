@@ -15,9 +15,9 @@ import {
   formatRemaining,
   restoreClient,
 } from "./store/session.ts";
-import { readPassword } from "./prompt.ts";
+import { readPassword, readConfirm } from "./prompt.ts";
 import { createSale, type SaleItemInput } from "./modules/sales.ts";
-import { createPurchase, type PurchaseItemInput } from "./modules/purchase.ts";
+import { createPurchase, type PurchaseItemInput, findPurchaseBill, deletePurchaseBill, forceDeletePurchaseBill } from "./modules/purchase.ts";
 import { listProducts, getProduct, createProduct } from "./modules/product.ts";
 import { listBtypes, getBtype, createBtype, setBtypeStopped, updateBtypeContact, type BtypeKind } from "./modules/customer.ts";
 
@@ -309,9 +309,67 @@ const purchaseCreate = defineCommand({
   },
 });
 
+const purchaseDelete = defineCommand({
+  meta: { name: "delete", description: "删除采购入库单（二次确认 + 负库存保护）" },
+  args: {
+    bill: { type: "string", description: "采购单号(CR-...)或 vchcode（必填）", required: true },
+    force: { type: "boolean", description: "删除会导致负库存时，强制删除(confirm:true)" },
+    yes: { type: "boolean", description: "跳过交互二次确认（非交互/脚本用；负库存强制删除仍需 --force）" },
+  },
+  async run({ args }) {
+    const ref = await findPurchaseBill(args.bill as string);
+    console.log(
+      `⚠️  即将删除采购单 ${ref.billNumber} | 供应商 ${ref.bfullname} | 金额 ${ref.currencyBillTotal} | 日期 ${ref.billDate}`,
+    );
+
+    // ① 二次确认（删除意图）
+    const confirmed = args.yes ? true : await readConfirm("确认删除? (y/N) ");
+    if (!confirmed) {
+      console.error(process.stdin.isTTY ? "✗ 已取消" : "✗ 未确认：非交互环境请加 --yes 显式确认");
+      process.exit(1);
+    }
+
+    // 第1阶段删除（不带 confirm）
+    const r1 = await deletePurchaseBill(ref);
+    if (r1.deleted) {
+      console.log(JSON.stringify({ success: true, deleted: true, billNumber: ref.billNumber, vchcode: ref.vchcode }, null, 2));
+      return;
+    }
+
+    if (r1.needsForce) {
+      // 删除会导致负库存：打印影响
+      const lines = r1.exceptions.flatMap((e) =>
+        (e.detail ?? []).map((d) => {
+          const x = d as Record<string, unknown>;
+          return `  - ${x.pfullname}(${x.kfullname ?? "默认仓库"}): 库存 ${x.stockQty}，删除后 ${x.unitQty}`;
+        }),
+      );
+      console.error(`✗ 删除会导致库存为负：\n${lines.join("\n")}`);
+      if (!args.force) {
+        console.error("如需强制删除（允许负库存），请加 --force");
+        process.exit(1);
+      }
+      // ② 负库存强制删除的二次确认
+      const confirmed2 = args.yes ? true : await readConfirm("⚠️ 强制删除会导致负库存，仍继续? (y/N) ");
+      if (!confirmed2) {
+        console.error("✗ 已取消");
+        process.exit(1);
+      }
+      const r2 = await forceDeletePurchaseBill(ref);
+      console.log(JSON.stringify({ success: r2.success, deleted: r2.deleted, forced: true, billNumber: ref.billNumber, vchcode: ref.vchcode, exceptions: r2.exceptions }, null, 2));
+      if (!r2.success) process.exit(1);
+      return;
+    }
+
+    // 其它错误
+    console.error(`✗ 删除失败：${r1.exceptions.map((e) => `${e.code}:${e.message}`).join("; ")}`);
+    process.exit(1);
+  },
+});
+
 const purchaseGroup = defineCommand({
   meta: { name: "purchase", description: "采购模块" },
-  subCommands: { create: purchaseCreate },
+  subCommands: { create: purchaseCreate, delete: purchaseDelete },
 });
 
 // ===== 商品模块 =====

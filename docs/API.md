@@ -720,4 +720,44 @@ recordsheet/       accBusinessType/list, basePtypeUnit/findFirstPtypeFullbarcode
 8. goodsBill/submitBill (confirm:true)         → 确认落库 → SUCCESS
 ```
 
+### 9.4 删除采购单 `POST /jxc/recordsheet/billCore/deleteBill` ★★★
+
+```jsonc
+{
+  "vchcode": "1904694987912656191",     // 单据 ID
+  "vchtype": "Buy", "businessType": "Buy",
+  "billDate": "2026-06-20T12:42:51.000+00:00",  // 单据日期（必填，从 list 取）
+  "billPostState": 800,                         // = 单据 postState（已过账=800）
+  "confirm": false                              // 负库存强制删时置 true
+}
+```
+
+**两种结果**（与 submitBill 的 confirm 机制同源）：
+
+| 情形 | 响应 `data` | 含义 |
+|------|------------|------|
+| 正常删除 | `{success:true, result:null}` | 已删除 |
+| 删后库存<0 | `{success:false, result:"ALLOW", errorDetail:[{bizErrorCode:"NEG_STOCK_ERROR", resultType:"CONFIRM", detailList:[{pfullname, stockQty, unitQty, ...}]}]}` | 需确认；带 `confirm:true` 重提即删 |
+
+> `confirm:true` 允许负库存删除（同 create 的 `--force`）。CLI `gjp purchase delete`：先无 confirm 删 → 若 `NEG_STOCK_ERROR` 且带 `--force`，再 `confirm:true` 重提。
+
+**billDate / billPostState 来源**：用 `POST /jxc/recordsheet/billCore/list` 查历史单据取。
+```jsonc
+{ "queryParams": { "postStateList":[800], "startTime":"...","endTime":"...",
+   "saleOrbuy":1, "execQueryPage":"BuyBillQuery", "vchtypes":[1000,1100,1200],
+   "conformType":0,"postState":"","invoiceType":0,"paymentType":0,"redbillState":-1,
+   "sourceNumber":"","settleAccountVisible":false }, "pageSize":200, "pageIndex":1 }
+```
+返回 `data.list[]`，每项含 `vchcode`/`billNumber`(CR-...)/`billDate`/`postState`/`bfullname`/`currencyBillTotal`。
+> ⚠️ `postStateList` 只接受**单个**值（多值返回空）。`800`=已过账。删单只针对已过账单据。
+
+### 9.5 业务流程示例：删除采购单（负库存场景）
+
+```
+1. billCore/list {postStateList:[800]}  → 按单号/vchcode 找到 billDate + postState
+2. billCore/deleteBill (confirm:false)   → 删后库存<0 → NEG_STOCK_ERROR / CONFIRM
+3. (用户确认负库存影响) billCore/deleteBill (confirm:true) → SUCCESS 落库删除
+```
+
+
 

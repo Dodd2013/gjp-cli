@@ -16,7 +16,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { JxcClient } from "../api/client.ts";
+import { JxcClient, ApiError } from "../api/client.ts";
 
 // HAR 真实生效的采购入库明细行模板（196 字段），仅覆盖动态字段
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -186,6 +186,116 @@ export async function createPurchase(input: CreatePurchaseInput, opts: { force?:
     total,
     needsConfirm,
     exceptions,
+    raw: data,
+  };
+}
+
+// ===== 采购单删除 =====
+// 接口 recordsheet/billCore/deleteBill，body {vchcode, vchtype:"Buy", businessType:"Buy", billDate, billPostState, confirm?}
+// 正常 → data.success:true。删后会导致负库存 → data.success:false, result:"ALLOW", errorDetail:[NEG_STOCK_ERROR, resultType:CONFIRM]
+// → 带 confirm:true 重提即落库（同 create 的 --force 机制）。
+
+export interface PurchaseBillRef {
+  vchcode: string;
+  billNumber: string;
+  billDate: string;
+  billPostState: number;
+  bfullname: string;
+  currencyBillTotal: number;
+}
+
+/** 按单号(CR-...)或 vchcode 查找已过账(postState=800)采购单，取 billDate/postState 供删除用 */
+export async function findPurchaseBill(bill: string): Promise<PurchaseBillRef> {
+  const api = new JxcClient();
+  await api.init();
+  const now = Date.now();
+  const data = await api.call<{ list: Record<string, unknown>[] }>("recordsheet/billCore/list", {
+    queryParams: {
+      postStateList: [800],
+      startTime: new Date(now - 3 * 365 * 86400000).toISOString(),
+      endTime: new Date(now + 365 * 86400000).toISOString(),
+      conformType: 0, postState: "", saleOrbuy: 1, invoiceType: 0, paymentType: 0,
+      redbillState: -1, sourceNumber: "", settleAccountVisible: false,
+      execQueryPage: "BuyBillQuery", vchtypes: [1000, 1100, 1200],
+    },
+    pageSize: 200, pageIndex: 1, sorts: null,
+  });
+  const list = data.list ?? [];
+  const hit = list.find((b) => b.vchcode === bill || b.billNumber === bill);
+  if (!hit) {
+    throw new ApiError(`未找到已过账(postState=800)的采购单"${bill}"`, "NOT_FOUND");
+  }
+  return {
+    vchcode: String(hit.vchcode),
+    billNumber: String(hit.billNumber ?? ""),
+    billDate: String(hit.billDate ?? ""),
+    billPostState: Number(hit.postState ?? 800),
+    bfullname: String(hit.bfullname ?? ""),
+    currencyBillTotal: Number(hit.currencyBillTotal ?? 0),
+  };
+}
+
+export interface DeletePurchaseResult {
+  success: boolean;
+  deleted: boolean;
+  /** 删除会导致负库存，需 --force(confirm:true) 重提 */
+  needsForce: boolean;
+  exceptions: { code: string; message: string; detail?: unknown[] }[];
+  raw?: unknown;
+}
+
+function parseErrs(errorDetail: unknown[]): { code: string; message: string; detail?: unknown[] }[] {
+  return (errorDetail ?? []).map((e) => {
+    const o = e as Record<string, unknown>;
+    return { code: String(o.bizErrorCode ?? ""), message: String(o.message ?? ""), detail: o.detailList as unknown[] };
+  });
+}
+
+/** 删除采购单（第1阶段，不带 confirm）。若返回 needsForce=true 表示会导致负库存，需再调 forceDeletePurchaseBill。 */
+export async function deletePurchaseBill(ref: PurchaseBillRef): Promise<DeletePurchaseResult> {
+  const api = new JxcClient();
+  await api.init();
+  const { json } = await api.callRaw("recordsheet/billCore/deleteBill", {
+    vchcode: ref.vchcode,
+    vchtype: "Buy",
+    businessType: "Buy",
+    billDate: ref.billDate,
+    billPostState: ref.billPostState,
+  });
+  const data = json?.data ?? {};
+  if (data.success === true) {
+    return { success: true, deleted: true, needsForce: false, exceptions: [], raw: data };
+  }
+  const errs = parseErrs(data.errorDetail);
+  const needsForce = errs.some((e) => e.code === "NEG_STOCK_ERROR");
+  return {
+    success: false,
+    deleted: false,
+    needsForce,
+    exceptions: errs.length ? errs : [{ code: "ERROR", message: String(json?.message ?? "删除失败") }],
+    raw: data,
+  };
+}
+
+/** 强制删除（confirm:true，允许负库存）。仅在用户明确确认负库存影响后调用。 */
+export async function forceDeletePurchaseBill(ref: PurchaseBillRef): Promise<DeletePurchaseResult> {
+  const api = new JxcClient();
+  await api.init();
+  const { json } = await api.callRaw("recordsheet/billCore/deleteBill", {
+    vchcode: ref.vchcode,
+    vchtype: "Buy",
+    businessType: "Buy",
+    billDate: ref.billDate,
+    billPostState: ref.billPostState,
+    confirm: true,
+  });
+  const data = json?.data ?? {};
+  const errs = parseErrs(data.errorDetail);
+  return {
+    success: data.success === true,
+    deleted: data.success === true,
+    needsForce: false,
+    exceptions: errs,
     raw: data,
   };
 }
