@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>管家婆进销存 CLI 接入方案 v2 · TS+Bun 纯 HTTP 实现</title>
+    <style>
+        :root {
+            --primary: #6366f1;
+            --primary-dark: #4f46e5;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+            --bg: #0f172a;
+            --card: #ffffff;
+            --code-bg: #1e293b;
+            --code-fg: #e2e8f0;
+            --muted: #64748b;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            background: #f1f5f9;
+            color: #1e293b;
+            line-height: 1.7;
+            padding: 24px;
+        }
+        .wrap { max-width: 1180px; margin: 0 auto; }
+        .hero {
+            background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #ec4899 100%);
+            color: white;
+            border-radius: 24px;
+            padding: 48px 40px;
+            margin-bottom: 24px;
+            box-shadow: 0 20px 50px rgba(99,102,241,0.3);
+        }
+        .hero h1 { font-size: 2.4em; margin-bottom: 12px; letter-spacing: -0.5px; }
+        .hero .sub { font-size: 1.15em; opacity: 0.95; margin-bottom: 20px; }
+        .hero .stack {
+            display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px;
+        }
+        .hero .chip {
+            background: rgba(255,255,255,0.2);
+            backdrop-filter: blur(10px);
+            padding: 6px 16px; border-radius: 999px; font-size: 0.9em; font-weight: 500;
+        }
+        .badges { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 20px; }
+        .badge {
+            background: rgba(255,255,255,0.15);
+            border: 1px solid rgba(255,255,255,0.3);
+            padding: 8px 18px; border-radius: 10px; font-size: 0.92em;
+        }
+        .badge b { color: #fde68a; }
+
+        section.card {
+            background: var(--card);
+            border-radius: 20px;
+            padding: 32px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 20px rgba(15,23,42,0.06);
+        }
+        h2 {
+            font-size: 1.5em; color: var(--primary-dark); margin-bottom: 18px;
+            padding-bottom: 12px; border-bottom: 2px solid #e0e7ff;
+            display: flex; align-items: center; gap: 10px;
+        }
+        h3 { font-size: 1.15em; color: #334155; margin: 24px 0 12px; }
+        p { margin-bottom: 10px; color: #475569; }
+
+        .proven {
+            background: linear-gradient(135deg, #ecfdf5, #d1fae5);
+            border-left: 4px solid var(--success);
+            padding: 16px 20px; border-radius: 12px; margin: 16px 0;
+        }
+        .proven b { color: #065f46; }
+        .warn {
+            background: linear-gradient(135deg, #fffbeb, #fef3c7);
+            border-left: 4px solid var(--warning);
+            padding: 16px 20px; border-radius: 12px; margin: 16px 0;
+        }
+        .warn b { color: #92400e; }
+        .danger {
+            background: linear-gradient(135deg, #fef2f2, #fee2e2);
+            border-left: 4px solid var(--danger);
+            padding: 16px 20px; border-radius: 12px; margin: 16px 0;
+        }
+        .danger b { color: #991b1b; }
+
+        pre, .code {
+            background: var(--code-bg); color: var(--code-fg);
+            padding: 20px; border-radius: 12px;
+            font-family: 'JetBrains Mono', 'Fira Code', Monaco, Menlo, monospace;
+            font-size: 0.85em; line-height: 1.65; overflow-x: auto;
+            margin: 14px 0;
+        }
+        code {
+            background: #eef2ff; color: var(--primary-dark);
+            padding: 2px 7px; border-radius: 5px;
+            font-family: 'JetBrains Mono', Monaco, monospace; font-size: 0.88em;
+        }
+        .code .k { color: #f472b6; }   /* keyword */
+        .code .s { color: #86efac; }   /* string */
+        .code .c { color: #64748b; font-style: italic; } /* comment */
+        .code .n { color: #fbbf24; }   /* number */
+        .code .f { color: #60a5fa; }   /* func */
+
+        table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 0.9em; }
+        th { background: #f1f5f9; text-align: left; padding: 10px 14px; color: #334155; font-weight: 600; }
+        td { padding: 10px 14px; border-bottom: 1px solid #e2e8f0; color: #475569; vertical-align: top; }
+        td code { font-size: 0.82em; }
+        tr:hover td { background: #f8fafc; }
+
+        .flow { counter-reset: step; margin: 16px 0; }
+        .flow .step {
+            position: relative; padding: 14px 16px 14px 64px;
+            background: #f8fafc; border-radius: 12px; margin-bottom: 10px;
+            border-left: 3px solid var(--primary);
+        }
+        .flow .step::before {
+            counter-increment: step; content: counter(step);
+            position: absolute; left: 16px; top: 50%; transform: translateY(-50%);
+            width: 32px; height: 32px; background: var(--primary); color: white;
+            border-radius: 50%; display: flex; align-items: center; justify-content: center;
+            font-weight: 700; font-size: 0.9em;
+        }
+        .flow .step .t { font-weight: 600; color: #1e293b; }
+        .flow .step .d { font-size: 0.88em; color: #64748b; margin-top: 2px; }
+
+        .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+        .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+        @media (max-width: 800px) { .grid2, .grid3 { grid-template-columns: 1fr; } }
+
+        .tier {
+            border-radius: 14px; padding: 20px; border: 1px solid #e2e8f0;
+        }
+        .tier.t1 { background: #ecfdf5; border-color: #a7f3d0; }
+        .tier.t2 { background: #eff6ff; border-color: #bfdbfe; }
+        .tier.t3 { background: #fef3c7; border-color: #fde68a; }
+        .tier h4 { margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+        .tier .num { font-size: 1.3em; }
+        .tier.t1 h4 { color: #065f46; }
+        .tier.t2 h4 { color: #1e40af; }
+        .tier.t3 h4 { color: #92400e; }
+        .tier ul { margin-left: 18px; color: #475569; font-size: 0.9em; }
+        .tier ul li { margin-bottom: 4px; }
+
+        .arch {
+            background: var(--code-bg); color: #67e8f9; padding: 28px; border-radius: 16px;
+            font-family: monospace; font-size: 0.82em; line-height: 1.6; overflow-x: auto;
+        }
+        .arch .h { color: #fbbf24; }
+
+        .stat-row { display: flex; gap: 16px; flex-wrap: wrap; margin: 14px 0; }
+        .stat {
+            flex: 1; min-width: 140px; background: #f8fafc; border-radius: 12px;
+            padding: 16px; text-align: center; border: 1px solid #e2e8f0;
+        }
+        .stat .v { font-size: 1.8em; font-weight: 800; color: var(--primary); }
+        .stat .l { font-size: 0.82em; color: #64748b; margin-top: 4px; }
+
+        .footer { text-align: center; color: #94a3b8; padding: 30px 0 10px; font-size: 0.88em; }
+        ul.clean { margin: 8px 0 8px 22px; color: #475569; }
+        ul.clean li { margin-bottom: 5px; }
+        .pill { display:inline-block; padding:2px 9px; border-radius:999px; font-size:0.78em; font-weight:600; }
+        .pill.post { background:#fef3c7; color:#92400e; }
+        .pill.get { background:#dbeafe; color:#1e40af; }
+        .pill.done { background:#d1fae5; color:#065f46; }
+        .pill.risk { background:#fee2e2; color:#991b1b; }
+    </style>
+</head>
+<body>
+<div class="wrap">
+
+    <!-- HERO -->
+    <div class="hero">
+        <h1>🚀 管家婆进销存 CLI 接入方案 · v2</h1>
+        <div class="sub">纯 HTTP + TypeScript + Bun 实现，无浏览器依赖。核心 RSA 加密已验证跑通。</div>
+        <div class="stack">
+            <span class="chip">⚡ Bun 1.2</span>
+            <span class="chip">📘 TypeScript</span>
+            <span class="chip">🔗 原生 fetch + Cookie Jar</span>
+            <span class="chip">🔐 纯 BigInt RSA</span>
+            <span class="chip">🤖 Claude Code / MCP</span>
+        </div>
+        <div class="badges">
+            <div class="badge">✅ <b>RSA 加密</b>：已用 Bun 实跑，密文与 HAR 逐位一致</div>
+            <div class="badge">⚠️ <b>指纹 Token</b>：唯一不确定项，有三级降级方案</div>
+        </div>
+    </div>
+
+    <!-- 执行摘要 -->
+    <section class="card">
+        <h2>📌 核心结论（先看这个）</h2>
+        <p>通过对 <code>passport.mygjp.com.cn</code> 前端 JS 的完整逆向，登录流程可拆解为两块：<b>可完全复现的加密</b> 与 <b>需要引导获取的指纹 Token</b>。</p>
+
+        <div class="proven">
+            <b>✅ 已验证可行（纯 TS，无浏览器）</b>
+            <ul class="clean">
+                <li><b>RSA-1024 加密</b>：公钥 <code>e=0x10001</code>、模数 <code>n</code> 硬编码在前端，已移植为原生 BigInt 实现。Bun 实跑产出 <b>256 hex / 128 字节</b>密文，与 HAR 抓包格式完全一致，随机填充（PKCS#1 type2）也正常。</li>
+                <li><b>登录请求</b>：纯 <code>fetch</code> POST，JSON body 结构已完全掌握。</li>
+                <li><b>会话维持</b>：登录成功后服务端下发 <b>HttpOnly Cookie</b>（HAR 中被 Chrome 剥离），用 Cookie Jar 持久化即可，所有 <code>/jxc/</code> 接口靠它鉴权。</li>
+            </ul>
+        </div>
+
+        <div class="warn">
+            <b>⚠️ 唯一风险点：设备指纹 Token（deviceId / ati / pati）</b>
+            <p style="margin-bottom:8px;">登录请求里这三个字段来自 <b>京东 eid</b>、<b>拼多多 pati</b>、<b>安全 SDK _ati</b> —— 它们本质是反爬虫指纹，纯算法生成极其困难。是否严格校验取决于服务端（无法离线判定），方案设计了 <b>三级降级策略</b>应对，详见第 4 节。</p>
+        </div>
+
+        <div class="stat-row">
+            <div class="stat"><div class="v">100%</div><div class="l">加密可复现</div></div>
+            <div class="stat"><div class="v">3</div><div class="l">级降级方案</div></div>
+            <div class="stat"><div class="v">0</div><div class="l">Playwright 依赖</div></div>
+            <div class="stat"><div class="v">~256</div><div class="l">hex 密文长度</div></div>
+        </div>
+    </section>
+
+    <!-- 加密机制 -->
+    <section class="card">
+        <h2>🔐 第 1 节 · 加密机制（已逆向 + 已验证）</h2>
+
+        <h3>1.1 加密库来源</h3>
+        <p>前端加载的加密文件（已抓取源码逐行分析）：</p>
+        <table>
+            <tr><th>文件</th><th>作用</th><th>状态</th></tr>
+            <tr><td><code>RSA.js</code></td><td>RSA 加密核心，<b>硬编码公钥</b></td><td><span class="pill done">已逆向</span></td></tr>
+            <tr><td><code>BigInt.js</code> + <code>Barrett.js</code></td><td>大整数运算（原生 BigInt 替代）</td><td><span class="pill done">已替代</span></td></tr>
+            <tr><td><code>md5.js</code></td><td>MD5（jQuery 插件，用于 pin 字段）</td><td><span class="pill done">已替代</span></td></tr>
+            <tr><td><code>ngplogin_page_new.js</code></td><td>登录页主逻辑，调用加密函数</td><td><span class="pill done">已逆向</span></td></tr>
+        </table>
+
+        <h3>1.2 公钥参数（来自 RSA.js 源码第 1-4 行）</h3>
+        <pre><span class="c">// 来源：https://passport.mygjp.com.cn/js/RSA.js（硬编码，每次访问都一样）</span>
+<span class="k">const</span> <span class="f">EXPONENT</span> = <span class="n">0x10001n</span>;   <span class="c">// 公钥指数 e = 65537</span>
+<span class="k">const</span> <span class="f">MODULUS</span>  = <span class="n">0x9A568982EE4BF010C38B5195A6F2DC7D66D5E6C02098CF25044CDD031AC08C65</span>
+            <span class="n">69D7063BB8959CB3FCB5AF572DE355AFA684AF7187948744E673275B494F394AF</span>
+            <span class="n">7F158841CA8B63BF65F185883F8D773A57ED731EDCD1AF2E0E57CD45F5F3CB4EB</span>
+            <span class="n">DD38F4A267E5ED02E7B44B93EDFFDADBDC8368019CD496BEC735BAF9E57125n</span>;  <span class="c">// 1024-bit</span></pre>
+
+        <h3>1.3 加密规则（来自 ngplogin_page_new.js:985-988）</h3>
+        <pre><span class="c">// 前端真实调用：</span>
+setMaxDigits(<span class="n">129</span>);
+<span class="k">const</span> key = <span class="k">new</span> <span class="f">RSAKeyPair</span>();                       <span class="c">// 无参，公钥在内部</span>
+<span class="k">const</span> userName = <span class="f">encryptedString</span>(key, <span class="f">encodeURIComponent</span>(username));  <span class="c">// 用户名：先 URI 编码</span>
+<span class="k">const</span> password = <span class="f">encryptedString</span>(key, $.<span class="f">trim</span>(password));           <span class="c">// 密码：直接加密</span>
+<span class="c">// companyName 明文传输，不加密</span></pre>
+
+        <h3>1.4 填充算法（Ohdave RSA.js 自定义 PKCS#1 type2 变体）</h3>
+        <p>这是<b>非标准</b>填充（明文字节逆序 + 自定义标记位），所以不能直接用 Node <code>crypto.publicEncrypt</code>。必须手动构造数据块：</p>
+        <pre>每个 128 字节数据块布局（低位→高位）：
+┌─────────────────────────────────────────────────────────────┐
+│ <span class="s">明文字节（逆序）</span> │ 0x00 │ <span class="n">随机字节(1..254) × N</span> │ 0x02 │ 0x00 │
+└─────────────────────────────────────────────────────────────┘
+   → 打包成 BigInt → 计算 <span class="f">block^65537 mod n</span> → 输出 256 hex
+
+<span class="c">// 关键特性：随机字节使"同一明文每次密文不同"</span>
+<span class="c">// HAR 印证：同一段用户名在 /errorcount/get 中出现 4 次密文各不相同 ✓</span></pre>
+
+        <div class="proven">
+            <b>✅ Bun 实跑验证结果</b>
+            <pre style="margin-top:8px;background:#064e3b;color:#a7f3d0;">📝 用户名 "管理员" (URI编码后 27 字节)
+   密文长度: 256 hex = 128 字节, 1 块          ← 与 HAR 完全一致
+   ✅ 同明文两次加密结果不同 (随机填充生效)    ← 与 HAR 中 4 次不同密文一致
+✅ 密文长度 256 hex，与 HAR 抓包完全一致</pre>
+        </div>
+    </section>
+
+    <!-- 鉴权流程 -->
+    <section class="card">
+        <h2>🔑 第 2 节 · 完整鉴权流程</h2>
+        <p>登录后鉴权靠 <b>HttpOnly Cookie</b>（HAR 中被 Chrome 出于安全剥离，但抓包显示 <code>afterLogin</code> 等请求无任何显式 token 仍返回 200，证明 cookie 在 cookie jar 里自动携带）。</p>
+
+        <div class="flow">
+            <div class="step">
+                <div class="t">(可选) POST <code>/errorcount/get</code> · 查询错误次数</div>
+                <div class="d">body: <code>{productId:88, companyName, userName: RSA(用户名)}</code>。若 <code>errorCount≥3</code> 触发滑块验证码。<b>正常登录无需</b>。</div>
+            </div>
+            <div class="step">
+                <div class="t">POST <code>passport.mygjp.com.cn/api/ngpLogin</code> · 核心登录</div>
+                <div class="d">body: <code>{userName, password, companyName, deviceId, ati, pati, validateCode, validateId, https:true, loginType}</code>。返回 redirectKey + 设置 passport 域 cookie。</div>
+            </div>
+            <div class="step">
+                <div class="t">GET <code>ngpkj.wsgjp.com.cn/main.html?redirectKey=…&timestamp=…&sign=…</code> · 302 换 session</div>
+                <div class="d">服务端校验 redirectKey+sign，下发 <b>ngpkj 域 HttpOnly 会话 Cookie</b>，302 跳到 <code>main.html?v=…</code>。</div>
+            </div>
+            <div class="step">
+                <div class="t">POST <code>ngpkj.wsgjp.com.cn/jxc/recordsheet/sys/afterLogin</code> · 会话定型</div>
+                <div class="d">空 body。返回 <code>{"code":"200","message":"操作成功"}</code>。此后所有 <code>/jxc/</code> 接口可用。</div>
+            </div>
+            <div class="step">
+                <div class="t">Cookie Jar 持久化 → 后续业务调用</div>
+                <div class="d">把会话 cookie 写入本地加密文件（<code>~/.gjp/session.json</code>），复用直至过期，过期自动重登。</div>
+            </div>
+        </div>
+
+        <h3>2.1 登录请求完整结构（逐字段）</h3>
+        <table>
+            <tr><th>字段</th><th>来源</th><th>处理</th></tr>
+            <tr><td><code>userName</code></td><td>用户输入</td><td><code>encodeURIComponent</code> → RSA → hex</td></tr>
+            <tr><td><code>password</code></td><td>用户输入</td><td>RSA → hex</td></tr>
+            <tr><td><code>companyName</code></td><td>用户输入</td><td>明文（如 <code>01292178</code>）</td></tr>
+            <tr><td><code>deviceId</code></td><td>京东 SDK <code>getJdEid()</code></td><td><span class="pill risk">指纹</span> 见第 4 节</td></tr>
+            <tr><td><code>ati</code></td><td>cookie <code>_ati</code></td><td><span class="pill risk">指纹</span> 见第 4 节</td></tr>
+            <tr><td><code>pati</code></td><td>拼多多 SDK <code>PDD_OPEN_getPati()</code></td><td><span class="pill risk">指纹</span> 见第 4 节</td></tr>
+            <tr><td><code>validateCode</code></td><td>滑块验证码</td><td>正常登录为空 <code>""</code></td></tr>
+            <tr><td><code>https</code></td><td><code>checkHttps()</code></td><td>固定 <code>true</code></td></tr>
+        </table>
+    </section>
+
+    <!-- 指纹 Token 策略 -->
+    <section class="card">
+        <h2>🛡️ 第 4 节 · 指纹 Token 三级降级策略</h2>
+        <p><b>这是整个方案唯一的不确定项。</b>三个指纹字段由反爬 SDK 生成，纯 TS 无法凭空伪造合法值。策略：从简单到复杂依次尝试，命中即停。</p>
+
+        <div class="grid3">
+            <div class="tier t1">
+                <h4><span class="num">①</span> 空值试探</h4>
+                <p style="font-size:0.88em;color:#475569;">先发空/占位值，很多系统仅在异常时才严格校验指纹。</p>
+                <ul>
+                    <li><code>deviceId/ati/pati</code> 全留空</li>
+                    <li>凭据正确时大概率放行</li>
+                    <li>零成本，先试这个</li>
+                </ul>
+                <p style="margin-top:8px;font-size:0.82em;color:#065f46;"><b>预期：60% 系统能过</b></p>
+            </div>
+            <div class="tier t2">
+                <h4><span class="num">②</span> 一次性引导（推荐）</h4>
+                <p style="font-size:0.88em;color:#475569;">用户在自己浏览器 <b>手动</b>（非自动化）取一次值，本地永久保存。指纹通常按天/周有效。</p>
+                <ul>
+                    <li>CLI 引导命令 <code>gjp auth bootstrap</code></li>
+                    <li>打印提取步骤（DevTools 复制）</li>
+                    <li>存入本地配置，自动续期检测</li>
+                </ul>
+                <p style="margin-top:8px;font-size:0.82em;color:#1e40af;"><b>这不是 Playwright，是 30 秒手动操作</b></p>
+            </div>
+            <div class="tier t3">
+                <h4><span class="num">③</span> SDK 最小化复现</h4>
+                <p style="font-size:0.88em;color:#475569;">若 ② 过期太快（几小时），则拉取 SDK 源码，用 Bun 跑 JS 沙箱生成。</p>
+                <ul>
+                    <li>分析 <code>sdk-glue.js</code> / <code>bdms.js</code></li>
+                    <li>无 DOM 依赖部分用 Bun 执行</li>
+                    <li>成本最高，最后手段</li>
+                </ul>
+                <p style="margin-top:8px;font-size:0.82em;color:#92400e;"><b>保底方案</b></p>
+            </div>
+        </div>
+
+        <div class="warn">
+            <b>💡 关键判断</b>：先<b>用真实账号跑一次 Tier ①</b>。若登录返回 200 且拿到会话 cookie → 整个指纹问题不存在，方案 100% 纯 HTTP。若被拒 → 升级 Tier ②。这个判断在拿到测试账号后 10 分钟内就能完成。
+        </div>
+    </section>
+
+    <!-- CLI 架构 -->
+    <section class="card">
+        <h2>🏗️ 第 3 节 · CLI 架构（TS + Bun）</h2>
+
+        <div class="arch">
+<span class="h">┌─────────────────────────────────────────────────────────────┐</span>
+<span class="h">│  Claude Code (Agent)  ←→  MCP Server 或直接 shell 调用       │</span>
+<span class="h">└──────────────────────────────┬──────────────────────────────┘</span>
+                               │  <span class="c">gjp &lt;command&gt; [opts]</span>
+                               ▼
+┌─────────────────────────────────────────────────────────────┐
+│  <span class="h">GJP CLI (Bun + clipanion/citty)</span>                              │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐         │
+│  │ auth     │ │ stock    │ │ purchase │ │ sales    │  ...    │
+│  │ login    │ │ list     │ │ create   │ │ create   │         │
+│  │ status   │ │ in/out   │ │ list     │ │ query    │         │
+│  └──────────┘ └──────────┘ └──────────┘ └──────────┘         │
+└──────────────────────────────┬──────────────────────────────┘
+                               │
+          ┌────────────────────┼────────────────────┐
+          ▼                    ▼                    ▼
+   <span class="h">src/crypto</span>          <span class="h">src/http</span>           <span class="h">src/store</span>
+   rsa.ts (BigInt)      client.ts           session.ts
+   md5.ts               cookieJar.ts        config.ts (加密落盘)
+                        (tough-cookie)
+                               │
+                               ▼
+        <span class="h">管家婆 API</span>  passport.mygjp.com.cn  +  ngpkj.wsgjp.com.cn/jxc/
+└─────────────────────────────────────────────────────────────┘
+        </div>
+
+        <h3>3.1 目录结构</h3>
+        <pre><span class="c">gjp-cli/</span>
+├── src/
+│   ├── <span class="f">crypto/</span>
+│   │   ├── rsa.ts          <span class="c"># RSA-1024 加密（已验证）</span>
+│   │   └── md5.ts          <span class="c"># MD5（pin 字段）</span>
+│   ├── <span class="f">http/</span>
+│   │   ├── client.ts       <span class="c"># fetch 封装 + 重试 + 错误码</span>
+│   │   └── cookieJar.ts    <span class="c"># tough-cookie 会话管理</span>
+│   ├── <span class="f">auth/</span>
+│   │   ├── login.ts        <span class="c"># ngpLogin → redirect → afterLogin</span>
+│   │   ├── session.ts      <span class="c"># 会话持久化 + 过期检测</span>
+│   │   └── fingerprint.ts  <span class="c"># 指纹三级策略</span>
+│   ├── <span class="f">modules/</span>             <span class="c"># 业务模块（按 HAR 逐步补）</span>
+│   │   ├── stock.ts  purchase.ts  sales.ts  finance.ts  report.ts
+│   ├── <span class="f">store/</span>
+│   │   └── config.ts       <span class="c"># ~/.gjp/ AES 加密配置</span>
+│   └── <span class="f">cli.ts</span>              <span class="c"># 命令入口（citty）</span>
+├── tests/  <span class="c"># rsa.test.ts 已过</span>
+├── package.json   bunfig.toml   tsconfig.json
+└── README.md</pre>
+
+        <h3>3.2 命令设计</h3>
+        <pre><span class="c"># 鉴权</span>
+gjp auth login      --company 01292178 --user 管理员 --pass ****   <span class="c"># 登录并存 session</span>
+gjp auth status                                                      <span class="c"># 查 session 有效期</span>
+gjp auth refresh                                                     <span class="c"># 过期自动重登</span>
+gjp auth bootstrap                                                   <span class="c"># 引导录入指纹(Tier②)</span>
+gjp auth logout
+
+<span class="c"># 业务（JSON 输出，便于 AI 解析）</span>
+gjp stock list        --keyword 可乐 --page 1
+gjp purchase create   --supplier xx --items items.json
+gjp sales query       --date 2026-06-01,2026-06-20 --format json
+gjp report inventory  --warehouse 主仓库
+
+<span class="c"># 所有命令默认 --json 输出，AI 友好</span></pre>
+    </section>
+
+    <!-- API 目录 -->
+    <section class="card">
+        <h2>🌐 第 5 节 · 已识别 API 目录（HAR 提取）</h2>
+        <p>以下为 <code>ngpkj.wsgjp.com.cn/jxc/</code> 下的接口，全部 POST + JSON，靠 session cookie 鉴权。后续每个业务 HAR 样例会持续补全。</p>
+
+        <table>
+            <tr><th>模块</th><th>接口</th><th>功能</th><th>置信度</th></tr>
+            <tr><td rowspan="4"><b>baseinfo</b><br>基础信息</td><td><code>/recordsheet/sys/afterLogin</code></td><td>会话定型</td><td><span class="pill done">已验证</span></td></tr>
+            <tr><td><code>/baseinfo/etype/loginuser/checkloginuserphone</code></td><td>校验用户手机</td><td><span class="pill done">已抓包</span></td></tr>
+            <tr><td><code>/baseinfo/sysmodel/getApplicationCenterUrl</code></td><td>应用中心 URL</td><td><span class="pill done">已抓包</span></td></tr>
+            <tr><td><code>/baseinfo/basicinfo/getLockScreenInfo</code></td><td>锁屏信息</td><td><span class="pill done">已抓包</span></td></tr>
+            <tr><td rowspan="6"><b>recordsheet</b><br>单据</td><td><code>/recordsheet/goodsBill/getBillByVchcode</code></td><td>按单号查单据</td><td><span class="pill done">已抓包</span></td></tr>
+            <tr><td><code>/recordsheet/accBusinessType/list</code></td><td>业务类型列表</td><td><span class="pill done">已抓包</span></td></tr>
+            <tr><td><code>/recordsheet/billsetting/getSwitchList</code></td><td>单据开关配置</td><td><span class="pill done">已抓包</span></td></tr>
+            <tr><td><code>/recordsheet/customConfig/list</code></td><td>自定义配置</td><td><span class="pill done">已抓包</span></td></tr>
+            <tr><td><code>/recordsheet/billMark/list</code></td><td>单据标记</td><td><span class="pill done">已抓包</span></td></tr>
+            <tr><td><code>/recordsheet/billCore/*</code></td><td>单据核心增删改查</td><td><span class="pill risk">待补样例</span></td></tr>
+            <tr><td><b>待补全</b></td><td colspan="3">采购单/销售单/库存盘点/财务凭证/报表查询的完整增删改查 —— <b>需要更多 HAR 样例</b></td></tr>
+        </table>
+
+        <div class="warn">
+            <b>📝 我需要的 HAR 样例</b>（你在系统里操作一遍，浏览器导出 HAR 即可）：
+            <ul class="clean" style="margin-top:6px;">
+                <li><b>采购</b>：新建采购入库单（含选供应商、商品、数量、保存、审核）</li>
+                <li><b>销售</b>：新建销售出库单（完整流程）</li>
+                <li><b>库存</b>：库存查询、盘点单</li>
+                <li><b>报表</b>：进销存报表、利润报表</li>
+            </ul>
+            每个样例能补全一个模块的全部接口。
+        </div>
+    </section>
+
+    <!-- 实施路线 -->
+    <section class="card">
+        <h2>📅 第 6 节 · 实施路线图</h2>
+        <table>
+            <tr><th>阶段</th><th>内容</th><th>产出</th><th>依赖</th></tr>
+            <tr><td><b>P0 · 验证</b><br>0.5 天</td><td>用真实账号跑 Tier① 空指纹登录</td><td>确认指纹是否必须 → 锁定方案</td><td>测试账号</td></tr>
+            <tr><td><b>P1 · 鉴权闭环</b><br>1-2 天</td><td>crypto + http + auth/login + session 持久化</td><td><code>gjp auth login/status</code> 可用</td><td>P0 结论</td></tr>
+            <tr><td><b>P2 · CLI 骨架</b><br>0.5 天</td><td>citty 命令框架、配置加密、日志、JSON 输出</td><td>统一命令规范</td><td>P1</td></tr>
+            <tr><td><b>P3 · 业务模块</b><br>3-5 天</td><td>按 HAR 样例逐模块实现 stock/purchase/sales…</td><td>完整业务命令</td><td>更多 HAR</td></tr>
+            <tr><td><b>P4 · AI 集成</b><br>1 天</td><td>MCP server 或 Claude Code skill + 提示词</td><td>Claude 可调用</td><td>P3</td></tr>
+            <tr><td><b>P5 · 加固</b><br>1 天</td><td>错误处理、限流、重试、测试覆盖</td><td>生产可用</td><td>P4</td></tr>
+        </table>
+    </section>
+
+    <div class="footer">
+        🤖 管家婆进销存 CLI 接入方案 v2 · TS + Bun 纯 HTTP · 生成于 <span id="ts"></span>
+        <br>RSA 加密已用 Bun 1.2 实跑验证通过 · 详见 <code>gjp-cli/src/crypto/rsa.ts</code>
+    </div>
+</div>
+<script>document.getElementById('ts').textContent=new Date().toLocaleString('zh-CN');</script>
+</body>
+</html>

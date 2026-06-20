@@ -2,6 +2,9 @@
   "name": "gjp-cli",
   "version": "0.1.0",
   "type": "module",
+  "bin": {
+    "gjp": "./bin/gjp.js"
+  },
   "scripts": {
     "login": "bun run src/auth/test-login.ts",
     "test": "bun test"
