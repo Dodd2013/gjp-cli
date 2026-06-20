@@ -1,7 +1,7 @@
 ---
 name: gjp
 description: 通过 gjp CLI 操作网上管家婆（wsgjp）进销存系统——开销售/采购单、查库存、查报表等。
-  当用户提到「管家婆」「进销存」「开单/开销售单/开采购单」「查库存」「出入库」「gjp」等，需要在该系统里做操作时使用。
+  当用户提到「管家婆」「进销存」「开单/开销售单/开采购单」「查库存」「新增商品/建商品」「出入库」「gjp」等，需要在该系统里做操作时使用。
   前置：需已安装 gjp CLI 并执行 gjp auth login。所有命令默认输出 JSON。
 ---
 
@@ -74,6 +74,27 @@ gjp sales create -c 万达超市 \
 ```bash
 gjp sales create -c 万达超市 --items '[{"name":"可口可乐","qty":1,"price":3.5}]' --dry-run
 ```
+
+## 商品（product）
+
+### 查商品列表
+```bash
+gjp product list [-k <关键字>] [-n <条数>]     # 默认 50 条
+```
+
+### 查商品详情
+```bash
+gjp product get --id <商品ID>
+```
+
+### 新建商品
+```bash
+gjp product create \
+  -n <商品全名> -c <编号> \      # 必填；编号需唯一，重复报 5001002
+  [-u 单位] [--cost 成本价] [--sale 售价] [--retail 零售价] [--standard 规格]
+```
+例：`gjp product create -n "可口可乐1L" -c KL001 -u 瓶 --cost 3 --sale 5 --standard "1L"`
+输出：`{success, id, usercode, message}`。编号重复时 `success:false, message:"商品编号重复"`。
 
 ## 库存（stock）
 

@@ -428,3 +428,59 @@ recordsheet/ (22)  accBusinessType/list, basePtypeUnit/findFirstPtypeFullbarcode
                          getBindPtypePositionList·getPtypePrice·getPtypePriceAndCost·getStockQty,
                    sys/afterLogin
 ```
+
+---
+
+## 7. 商品管理模块 `baseinfo/ptype`（来自 商品.har）
+
+该 HAR 捕获**新增商品**流程。核心写接口 `ptype/save`，查接口 `ptype/get` / `ptype/unitsku/childpagelist`。
+
+### 7.1 新建/修改商品 `POST /jxc/baseinfo/ptype/save` ★★★
+
+请求体（精简，61 字段模板见 `src/modules/templates/product-save.json`）：
+```jsonc
+{
+  "id": 0,                       // 0=新建，已有id=修改
+  "fullname": "CLI测试商品A",
+  "shortname": "CLI测",
+  "usercode": "CLITEST001",      // 编号，需唯一；重复报 code 5001002
+  "ptypeType": "3",              // 3=普通商品
+  "costPrice": 10,
+  "standard": "1L",
+  "units": [{ "unitName": "个", "unitRate": 1, "buyPrice": 10, "preprice1": 15, "retailPrice": 0 }],
+  "priceList": [{ "unitCode": 1, "buyPrice": 10, "preprice1": 15, "retailPrice": 0 }],
+  "iniGoodsstockList": [],       // 初始库存，新建时留空
+  "initGoodsStock": { "batchList": [] }
+}
+```
+响应：成功 `code:200` + `data.id`；编号重复 `code:5001002 message:"商品编号重复"`。
+
+### 7.2 查商品详情 `POST /jxc/baseinfo/ptype/get` ★
+
+请求体为**纯字符串 ID**：`"1904554224660294712"`
+返回：`{id, fullname, usercode, shortname, ptypeType, costPrice, standard, ...}`。
+
+### 7.3 商品/SKU 列表 `POST /jxc/baseinfo/ptype/unitsku/childpagelist` ★
+
+```jsonc
+{ "refresh": true,
+  "queryParams": {
+    "filterkey": "quick", "filtervalue": "<关键字>",
+    "pcategories": [0,1,3,4], "stoped": 0, "skuStoped": 0, "ptypeStoped": 0,
+    "partypeid": null, "ktypeId": null, "showSaleFormula": false
+  },
+  "pageSize": 50, "pageIndex": 1 }
+```
+响应 `data.list[]`（树形：父行含 ptypeId，叶子 SKU 行字段较稀疏，需按 ptypeId 关联）。
+
+### 7.4 辅助接口
+
+| 接口 | 用途 |
+|------|------|
+| `basicinfo/getMaxUsercode`(Ptype) | 取当前最大编号（生成新编号用） |
+| `basicinfo/getIsAutoUsercode`(Ptype) | 是否自动编号 |
+| `basicinfo/getNewRowIndex`(Ptype) | 新行 ID |
+| `brandtype/list` | 品牌列表 |
+| `labelfield/ptypelabelvalue/list` | 商品标签 |
+| `prop/propvalue/propiddic` | 商品属性 |
+| `common/businessLog/pageList`(Ptype) | 商品操作日志 |

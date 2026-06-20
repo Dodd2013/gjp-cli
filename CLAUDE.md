@@ -161,6 +161,7 @@ cd docs && python3 -m http.server 8848      # http://localhost:8848/implementati
 - ✅ 鉴权全链路（登录/会话持久化/自动刷新/全局命令）—— 已用真实账号验证
 - ✅ `docs/API.md`（41 接口，含销售出库单创建完整流程）
 - ✅ **业务命令 `sales create`** —— 已实测建单成功（单/多商品、--force 绕过库存、总金额计算）
+- ✅ **业务命令 `product list/get/create`** —— 已实测（查商品、建商品 CLITEST001 成功，重复编号正确报 5001002）
   - 关键经验：明细行结构复杂（199字段），用 HAR 真实行做模板（`src/modules/templates/`）克隆+覆盖动态字段最稳；手工构造会缺字段导致"明细为空"
   - 新单据初始化：`getBillByVchcode`(copyTypeEnum:DEFAULT) 返回含 vchcode+number 的完整模板，不需单独调 billNumber
   - CONFIRM 异常：`--force` 置 needValidation:false + failedSaveUnconfirmed:true + allowZeroQty:true 可绕过（如 NEG_STOCK_ERROR）
