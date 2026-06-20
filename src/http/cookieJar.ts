@@ -111,10 +111,4 @@ export class HttpClient {
       },
     });
   }
-
-  /** 调试用：打印当前 jar 中所有 cookie */
-  async dumpCookies(): Promise<void> {
-    const store = (this.jar as unknown as { getAllCookies: () => Promise<unknown[]> })
-      .store ? (this.jar as unknown as { store: { getAllCookies: (cb: (err: unknown, c: unknown[]) => void) => void } }).store : null;
-  }
 }
