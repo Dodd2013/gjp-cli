@@ -37,7 +37,7 @@
 | vchtype | intVchtype | businessType | 含义 |
 |---------|-----------|--------------|------|
 | `Sale` | 2000 | `SaleNormal` / `SaleDistribution` | 销售出库 |
-| `Purchase` | 1000 | — | 采购入库 |
+| `Buy` | 1000 | `Buy` | 采购入库（单据号前缀 `CR-`） |
 | `GoodsTrans` | 3000 | `GoodsTrans` | 调拨/其它出入库 |
 | `SaleReturn` | — | — | 销售退货 |
 | `PurchaseReturn` | — | — | 采购退货 |
@@ -396,7 +396,7 @@ gjp sales create \
 
 | 业务 | 需要的操作 | 预期接口 |
 |------|-----------|---------|
-| 采购入库 | 新建采购单 | `goodsBill/submitBill`（vchtype=Purchase） |
+| ~~采购入库~~ | ~~新建采购单~~ | ✅ 已实现（见 §9，vchtype=Buy） |
 | 库存盘点 | 盘点单增删改 | `recordsheet/stocktake/*` |
 | 库存查询列表 | 多商品/多仓库汇总 | `recordsheet/report/*` |
 | 财务收付款 | 收款单/付款单 | `finance/*` |
@@ -408,17 +408,24 @@ gjp sales create \
 
 ---
 
-## 附：已识别接口汇总（41 个）
+## 附：已识别接口汇总
 
 ```
-baseinfo/ (18)     basicinfo/class·list, getIsAutoUsercode, getLockScreenInfo, getMaxUsercode,
-                   getUsercodeIncreaseRule, btype/list, btype/deliverinfo/getdefaulted,
-                   common/getEncryptSecretInfo, customFields/list, etype/getform,
+baseinfo/          basicinfo/class·list·save, basicinfo/getExact, basicinfo/getIsAutoUsercode,
+                   basicinfo/getLockScreenInfo, basicinfo/getMaxUsercode,
+                   basicinfo/getNewRowIndex, basicinfo/getUsercodeIncreaseRule,
+                   basicinfo/setUsercodeIncreaseRule,
+                   btype/list·save·batchStoped·batchUpdateBtypeLocation·checkBtypePhoneIsRepeat,
+                   btype/deliverinfo·getdefaulted·batchSave·pageList,
+                   common/getEncryptSecretInfo, common/businessLog/pageList,
+                   customFields/list, etype/getform·getlist,
                    etype/loginuser/checkloginuserphone, etype/overusercountcheck,
-                   ktype/deliverinfo/getList, ktype/pagelist, labelfield/baseInfoLabelValue/list,
-                   ptype/unit/ptypeiddic, pubsystemlog/saveform, sysmodel/getApplicationCenterUrl
+                   ktype/deliverinfo/getList, ktype/pagelist,
+                   labelfield/baseInfoLabelValue/list,
+                   ptype/save·get·unitsku/childpagelist, ptype/unit/ptypeiddic,
+                   pubsystemlog/saveform, sysmodel/getApplicationCenterUrl
 
-recordsheet/ (22)  accBusinessType/list, basePtypeUnit/findFirstPtypeFullbarcodeBatch,
+recordsheet/       accBusinessType/list, basePtypeUnit/findFirstPtypeFullbarcodeBatch,
                    billAudit/checkAuditEnable, billConfig/getBillStrategyConfigNoPower,
                    billCore/getBillPaymentDate, billMark/list, billNumber/back·updateBillNumber,
                    billsetting/getSwitchList, customConfig/list, giftType/list,
@@ -428,6 +435,8 @@ recordsheet/ (22)  accBusinessType/list, basePtypeUnit/findFirstPtypeFullbarcode
                          getBindPtypePositionList·getPtypePrice·getPtypePriceAndCost·getStockQty,
                    sys/afterLogin
 ```
+
+> 模块映射：`auth`（鉴权）、`sales`（销售单）、`purchase`（采购单）、`product`（商品）、`customer`（往来单位/客户/供应商）已在 CLI 实现。
 
 ---
 
@@ -484,3 +493,231 @@ recordsheet/ (22)  accBusinessType/list, basePtypeUnit/findFirstPtypeFullbarcode
 | `labelfield/ptypelabelvalue/list` | 商品标签 |
 | `prop/propvalue/propiddic` | 商品属性 |
 | `common/businessLog/pageList`(Ptype) | 商品操作日志 |
+
+---
+
+## 8. 往来单位模块（客户/供应商）`baseinfo/btype`
+
+该 HAR 捕获**新增客户、新增供应商、停用/启用**的完整流程。
+
+**核心类别枚举**（`bcategorys` / `bcategory` / `accType` 三者联动）：
+
+| 取值 | 含义 |
+|------|------|
+| `0` | 客户 |
+| `1` | 供应商 |
+| `3` | 其它往来单位（仅用于列表过滤 `queryBcategoryList`） |
+
+### 8.1 往来单位列表 `POST /jxc/baseinfo/btype/list` ★
+
+```jsonc
+{
+  "refresh": true,
+  "queryParams": {
+    "filterkey": "quick",            // 有 filtervalue 时用 quick，无则 ""
+    "filtervalue": "<关键字>",
+    "partypeid": "00000",            // 分类节点
+    "btypetype": "nofreight",
+    "priceLevel": null,
+    "stoped": false,                 // false=仅启用，null=含停用
+    "hasClass": true,
+    "queryBcategoryList": [0],       // [0]=客户 [1]=供应商 [0,1,3]=全部
+    "ignoreDeliveryinfo": true
+  },
+  "pageSize": 21, "pageIndex": 1,
+  "sorts": null, "orders": null, "first": 0, "count": 21
+}
+```
+
+响应 `data.list[]`（每项约 130 字段），关键字段：
+`id`、`usercode`(编号)、`fullname`(名称)、`shortname`、`bcategorys`/`accType`(类别)、
+`tel`、`person`(联系人)、`area`、`stoped`、`arTotal`(应收余额)、`apTotal`(应付余额)、
+`priceLevel`、`etypeid`/`efullname`(业务员)、`createTime`。`data.total` 为总数（字符串）。
+
+> 注：2.3 节描述的是销售单据内嵌的简化查询；此节为往来单位管理页的完整列表，字段更全。
+
+### 8.1b 往来单位详情 `POST /jxc/baseinfo/btype/get` ★
+
+请求体为**纯字符串 ID**：`"1904628733748474975"`
+返回该单位的完整记录（同 save 入参结构 + `memo`/`btypeInitData` 等），含已回填的 `tel`/`person`、`memo`、`priceLevel`、`etypeid` 等。**按 ID 取详情用此接口**（比 list 过滤更准、字段更全）。
+
+### 8.2 新建/修改往来单位 `POST /jxc/baseinfo/btype/save` ★★★
+
+**核心写接口**。请求体（精简，模板见 `src/modules/templates/btype-save.json`）：
+
+```jsonc
+{
+  "fullname": "测试客户1",          // 全名
+  "shortname": "测试客户",
+  "usercode": "3",                  // 编号，需唯一
+  "bcategorys": [0],                // [0]=客户 [1]=供应商
+  "bcategory": 0,                   // 同上
+  "accType": 0,                     // 同上（0=客户 1=供应商）
+  "priceLevel": "1",                // 客户用"1"，供应商用 0
+  "etypeid": "1265029598746566656", // 业务员 ID
+  "efullname": "管理员",
+  "parid": "1904593935937342239",   // 所属分类节点 ID（无则 null）
+  "parfullname": "客户和供应商分类1",
+  "partypeid": "00004",             // 分类 typeid（无则 "00000"）
+  "tel": "19906868955",
+  "person": "",                     // 联系人
+  "area": "天津/天津市/和平区/劝业场街道",
+  "registerAddr": "...",
+  "rowindex": "1904594571589924159",// 由 getNewRowIndex 取（见 8.6）
+  "customField": { "customHead01": "", /* ...customHead11 */ },
+  /* 其余金额/折扣/税率字段默认 0 */
+  "frontRequest": true
+}
+```
+
+**客户 vs 供应商差异**：
+
+| 字段 | 客户 | 供应商 |
+|------|------|--------|
+| `bcategorys` / `bcategory` / `accType` | `[0]` / `0` / `0` | `[1]` / `1` / `1` |
+| `priceLevel` | `"1"`（字符串） | `0`（数字） |
+| `initArTotal` / `initApTotal` | `0` / `"0"` | `"0"` / `0` |
+
+响应：成功 `code:200` + `data` = 新 btype ID（字符串）。
+
+> 💡 **电话/联系人/地址不在本接口保存**：`btype/save` 的 `tel`/`person`/`phone` 入参**不会持久化**（list 回显 null）。这些字段由紧随其后的 **`deliverinfo/batchSave`** 保存（见 8.4），成功后服务端**回填** `btype.tel`/`btype.person`。即浏览器建客户时 tel 能存，是因为它 save 后又调了 deliverinfo；只调 save 不调 deliverinfo，tel 就是 null。`fullname`/`usercode`/类别/`memo` 在 `btype/save` 直接生效。
+
+
+### 8.3 停用/启用 `POST /jxc/baseinfo/btype/batchStoped` ★
+
+```jsonc
+{ "ids": ["1904594571582221368"], "stoped": true, "freighted": false }
+```
+
+`stoped: true` 停用，`false` 启用。响应 `data: null`。
+
+### 8.4 发货信息（电话/联系人/地址的真正落点）★
+
+> **重要**：客户/供应商的电话、联系人、地址**经此接口保存**，而非 `btype/save`。`batchSave` 成功后服务端会**回填 `btype.tel`/`btype.person`**，故 list 才能显示电话。`customer create --phone/--contact/--area/--address` 与 `customer contact` 都走这里。
+
+| 接口 | 请求体 | 响应 |
+|------|--------|------|
+| `POST /btype/deliverinfo/batchSave` | `[{btypeId, receiverPeople, receiverTelephone, receiverCellphone, receiverZipcode, popupArea, receiverAddress, province, city, district, street, deliveryTypeList:[0,2], companyAddress:true, defaulted:true, modified:true, deliverytype:null}]` | `data: {"0": "<deliverId>"}` |
+| `POST /btype/deliverinfo/pageList` | `{queryParams:{btypeid}}` | `data.list[]` 含 `receiverTelephone`/`receiverPeople`/地址等 |
+
+`batchSave` 入参是**数组**（可一次多条）。`popupArea` 为完整地区串（如「天津/天津市/和平区/劝业场街道」），`province`/`city`/`district`/`street` 为其拆分。**更新**已有客户的联系方式时：先 `pageList` 取出已存在的行，提交时带上其 `id`/`deliveryinfoId` + `dynamicButtons`/`popupArea` + `modified:true`，服务端**原地覆盖**（deliverinfo 行数不变，实测保持 1 行），并回填 `btype.tel`/`person`。响应 `data` 形如 `{"0":"<id>"}`，该 id 每次可能不同（服务端重发句柄），不代表新增行。
+
+### 8.5 手机号查重 `POST /jxc/baseinfo/btype/checkBtypePhoneIsRepeat`
+
+```jsonc
+{ "phone": "19906868955" }
+```
+
+响应 `data: true/false`（是否已存在）。
+
+### 8.6 编码与行号辅助接口（basicname=Btype）
+
+| 接口 | 请求体 | 用途 |
+|------|--------|------|
+| `POST /basicinfo/getNewRowIndex` | `{stargetId, basicName:"Btype"}` | 取新 rowindex（`stargetId`=任意已存在 btype id） |
+| `POST /basicinfo/getMaxUsercode` | `{filterStr:"", queryType:"Usercode", basicInfoName:"Btype"}` | 当前最大编号，+1 推新号 |
+| `POST /basicinfo/getIsAutoUsercode` | `{queryType:"IsAutoUsercode", basicInfoName:"Btype"}` | 是否自动编码（`"1"`/`"0"`） |
+| `POST /basicinfo/getUsercodeIncreaseRule` | `{queryType:"UsercodeIncreaseRule", basicInfoName:"Btype"}` | 编码递增规则 |
+| `POST /basicinfo/setUsercodeIncreaseRule` | `{queryType:"UsercodeIncreaseRule", basicInfoName:"Btype", filterStr:"1"}` | 设置递增规则 |
+
+### 8.7 往来单位分类 `POST /jxc/baseinfo/basicinfo/class/*` ★
+
+| 接口 | 请求体 | 用途 |
+|------|--------|------|
+| `class/list` | `{partypeid:null, typeids:null, basicname:"Btype"}` | 分类树 |
+| `class/save` | `{basicname:"Btype", fullname:"客户和供应商分类1", partypeid:"00000"}` | 新增分类 |
+
+`class/save` 响应：`data.treeNodeDto.{typeid, id, fullname, partypeid}`。
+
+### 8.8 操作日志 `POST /jxc/baseinfo/common/businessLog/pageList`
+
+```jsonc
+{ "refresh": true,
+  "queryParams": { "basicName": "Btype", "objectId": "<btypeId>" },
+  "pageSize": 200, "pageIndex": 1 }
+```
+
+返回该往来单位的操作记录（创建/修改/停用等）。
+
+### 8.9 业务流程示例：新建客户
+
+```
+1. basicinfo/class/list(Btype)       → 取分类树（供选择 parid）
+2. customFields/list(subType:5002)    → 自定义字段配置
+3. getMaxUsercode/getIsAutoUsercode   → 推算编号
+4. labelfield/baseInfoLabelValue/list(btype) → 标签
+5. (可选) class/save                  → 新建分类
+6. getNewRowIndex(stargetId)          → 取 rowindex
+7. (可选) checkBtypePhoneIsRepeat     → 手机号查重
+8. btype/save                         → ★ 新建，返回新 id
+9. pubsystemlog/saveform              → 行为埋点（可跳过）
+10. btype/deliverinfo/batchSave       → 发货信息（可选）
+11. btype/list                        → 刷新列表
+```
+
+停用/启用：`batchStoped({ids, stoped:true/false})`。
+
+---
+
+## 9. 采购入库单模块（来自 采购入库单.har）
+
+与销售出库单（§4）**高度同构**，复用 `goodsBill/submitBill`。差异：
+
+| 项 | 销售（Sale） | 采购（Buy） |
+|----|------------|------------|
+| `vchtype` / `businessType` | `Sale` / `SaleNormal` | `Buy` / `Buy` |
+| `intVchtype` | 2000 | 1000 |
+| 单据号前缀 | `PXX-` | `CR-` |
+| 明细字段 | `outDetail` | `inDetail` |
+| btype | 客户（`resolveCustomer`） | 供应商（`resolveSupplier`，`bcategory:1`） |
+| 业务类型查询 | `accBusinessType/list {vchtypeEnum:"Sale"}` | `{vchtypeEnum:"Buy"}` |
+| 模板 | `getBillByVchcode{vchtype:"Sale",...}` | `{vchtype:"Buy",...}` |
+
+### 9.1 采购单结构 `POST /jxc/recordsheet/goodsBill/submitBill` ★★★
+
+关键字段（与销售相同的信封，仅列差异点）：
+
+```jsonc
+{
+  "vchtype": "Buy", "businessType": "Buy", "intVchtype": 1000,
+  "number": "CR-20260620-00003",
+  "ktypeId": "1265029598679457792",      // 仓库
+  "btypeId": "1904594932357963155",      // 供应商
+  "bfullname": "供应商1111",
+  "currencyBillTotal": "30",
+  "inDetail": [ /* 入库明细，196 字段/行，模板见 purchase-indetail-line.json */ ],
+  "outDetail": [],
+  "payment": [{ "afullname":"现金", "atypeId":"...", "currencyAtypeTotal":30 }],  // 付款账户+金额
+  "saveModel": "SAVE_NEW",
+  "needValidation": true,
+  "confirm": false                       // ★ 见 9.2
+}
+```
+
+`inDetail` 每行关键字段：`ptypeId`/`skuId`/`unitId`/`pFullName`/`unitQty`/`currencyPrice`(采购价)/`currencyCost`(成本)/`currencyTotal`/`currencyDisedPrice`/`ktypeId`。与 `outDetail` 共享约 192 字段，差异仅在库位字段（`inPosition*` vs `outPosition*`）等。
+
+### 9.2 CONFIRM 异常处理（关键差异）★
+
+采购单的需确认异常（如 `COST_BATCH_ERROR`「下列商品价格为0」）**不靠 `needValidation:false`**，而是在 submitBill body 里置 **`confirm: true`** 重提：
+
+| 提交 | `confirm` | 响应 resultType |
+|------|----------|----------------|
+| 第1次 | `false` | `CONFIRM`（exceptionInfo: COST_BATCH_ERROR 价格为0） |
+| 第2次 | `true` | `SUCCESS` |
+
+> 即明细行可保持不变（含 0 价），仅 `confirm:false→true` 重提即落库。CLI 的 `gjp purchase create --force` 即置 `confirm:true`。（对比：销售 `--force` 是 `needValidation:false` + `failedSaveUnconfirmed:true` + `allowZeroQty:true`。）
+
+### 9.3 业务流程示例：创建采购入库单
+
+```
+1. accBusinessType/list {vchtypeEnum:"Buy"}   → 业务类型 Buy
+2. goodsBill/getBillByVchcode {vchtype:"Buy",copyTypeEnum:DEFAULT}  → 取模板(含 vchcode+number+payment)
+3. btype/list {bcategory:1}                   → 选供应商
+4. ktype/pagelist                              → 选仓库
+5. billNumber/updateBillNumber                 → 生成单据号 CR-...
+6. ptype/getBatchPtypeSku + getPtypePriceAndCost + getStockQty  → 每个商品取SKU/价格/库存
+7. goodsBill/submitBill (confirm:false)        → 保存；COST_BATCH_ERROR → CONFIRM
+8. goodsBill/submitBill (confirm:true)         → 确认落库 → SUCCESS
+```
+
+

@@ -104,6 +104,23 @@ export class JxcClient {
     return { id: picked.id, name: picked.fullname ?? picked.name ?? "" };
   }
 
+  /** 供应商名 → {id, name}（bcategory:1 过滤供应商） */
+  async resolveSupplier(name: string): Promise<{ id: string; name: string }> {
+    const data = await this.call<{ list: { id: string; fullname?: string; name?: string }[] }>(
+      "baseinfo/btype/list",
+      {
+        refresh: true,
+        queryParams: { filterkey: "quick", filtervalue: name, bcategory: 1, cooperationType: "null", stoped: false, btypetype: "nofreight", labelFieldList: [], labelIdList: [], containLine: false, ignoreDeliveryinfo: true },
+        pageSize: 20, pageIndex: 1,
+      },
+    );
+    const list = data.list ?? [];
+    const exact = list.find((b) => (b.fullname ?? b.name) === name);
+    const picked = exact ?? list[0];
+    if (!picked) throw new ApiError(`未找到供应商"${name}"`, "NOT_FOUND");
+    return { id: picked.id, name: picked.fullname ?? picked.name ?? "" };
+  }
+
   /** 商品名 → ptypeId（在指定仓库范围内搜索） */
   async resolveProduct(name: string, warehouseId?: string): Promise<{ id: string; fullname: string; usercode: string }> {
     const data = await this.call<{ list: { id: string; fullname: string; usercode: string; shortname?: string }[] }>(

@@ -159,13 +159,27 @@ cd docs && python3 -m http.server 8848      # http://localhost:8848/implementati
 ## 当前进度（2026-06-20）
 
 - ✅ 鉴权全链路（登录/会话持久化/自动刷新/全局命令）—— 已用真实账号验证
-- ✅ `docs/API.md`（41 接口，含销售出库单创建完整流程）
+- ✅ `docs/API.md`（已识别接口，含销售出库单/商品/往来单位完整流程）
 - ✅ **业务命令 `sales create`** —— 已实测建单成功（单/多商品、--force 绕过库存、总金额计算）
 - ✅ **业务命令 `product list/get/create`** —— 已实测（查商品、建商品 CLITEST001 成功，重复编号正确报 5001002）
   - 关键经验：明细行结构复杂（199字段），用 HAR 真实行做模板（`src/modules/templates/`）克隆+覆盖动态字段最稳；手工构造会缺字段导致"明细为空"
   - 新单据初始化：`getBillByVchcode`(copyTypeEnum:DEFAULT) 返回含 vchcode+number 的完整模板，不需单独调 billNumber
   - CONFIRM 异常：`--force` 置 needValidation:false + failedSaveUnconfirmed:true + allowZeroQty:true 可绕过（如 NEG_STOCK_ERROR）
-- ⬜ 待补 HAR 样例：采购 / 库存盘点 / 报表 / 财务
+- ✅ **业务命令 `customer list/get/create/contact/stop/enable`**（来自 `客户、供应商.har`）—— **全部实测通过**（建客户/供应商含电话地址、更新联系方式、批量停用、搜索均验过，已清理测试数据）
+  - 类别三联动：`bcategorys`/`bcategory`/`accType` = `[0]`/`0`/`0`=客户，`[1]`/`1`/`1`=供应商；`priceLevel` 客户 `"1"`、供应商 `0`
+  - 新建需 `rowindex`：`basicinfo/getNewRowIndex({stargetId=任意已存在 btype id, basicName:"Btype"})`，编号未传时 `getMaxUsercode+1`
+  - 模板：`src/modules/templates/btype-save.json`（克隆客户 save 体的约 50 字段）
+  - 🔑 **电话/联系人/地址经 `deliverinfo/batchSave` 保存（不是 btype/save！）**：`btype/save` 的 tel/person/phone 入参不持久化；浏览器是 save 后再调 deliverinfo，由它回填 btype.tel/person。`customer create --phone/--contact/--area/--address` 和 `customer contact` 都已接入 deliverinfo。`fullname`/编号/类别/`memo` 在 btype/save 直接生效。
+  - **详情查 `btype/get`**（入参纯字符串 id）：`customer get` 用它，返回含 tel/memo 等完整字段（比 list 过滤准）。
+  - **`customer contact` 原地更新**：先 pageList 取行，带 `id`/`deliveryinfoId` + `dynamicButtons`/`popupArea` + `modified:true` 提交，行数不变（实测保持 1 行）并回填 btype.tel/person。响应 `{"0":id}` 的 id 每次可能变，不代表新增行。
+  - 教训：排查新接口字段「存不进去」时，先看 HAR 里 save 前后的**配套调用**（本例 deliverinfo），别急于归因风控/加密——之前因此误判过 TLS 指纹并白做了一轮排查。
+  - `btype/save` 成功只返回新 id 字符串
+- ✅ **业务命令 `purchase create`**（来自 `采购入库单.har`）—— **全部实测通过**（happy path 建单 + price=0 的 CONFIRM 检测 + `--force`(confirm:true) 落库均验过）
+  - vchtype/businessType = **`Buy`**（不是 Purchase！），intVchtype 1000，单据号前缀 `CR-`，明细用 `inDetail`（非 outDetail），btype=供应商（`resolveSupplier` bcategory:1）
+  - 与销售同构：`getBillByVchcode{vchtype:"Buy"}` 取模板（含 payment 付款账户），填 inDetail → submitBill
+  - 🔑 **CONFIRM 机制不同**：采购的需确认异常（如 `COST_BATCH_ERROR 价格为0`）靠 body 里 **`confirm:true`** 重提解除（销售是 `needValidation:false`+`failedSaveUnconfirmed`+`allowZeroQty`）。`--force` 即置 confirm:true，明细可不变
+  - 模板：`src/modules/templates/purchase-indetail-line.json`（196 字段，与 outDetail 共享约 192 字段，差异在 in/outPosition 库位字段）
+- ⬜ 待补 HAR 样例：库存盘点 / 报表 / 财务 / 单据列表查询
 
 ## 安全说明
 

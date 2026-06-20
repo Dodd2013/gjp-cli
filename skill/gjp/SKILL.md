@@ -1,7 +1,7 @@
 ---
 name: gjp
-description: 通过 gjp CLI 操作网上管家婆（wsgjp）进销存系统——开销售/采购单、查库存、查报表等。
-  当用户提到「管家婆」「进销存」「开单/开销售单/开采购单」「查库存」「新增商品/建商品」「出入库」「gjp」等，需要在该系统里做操作时使用。
+description: 通过 gjp CLI 操作网上管家婆（wsgjp）进销存系统——开销售/采购单、查库存、管商品、管客户/供应商、查报表等。
+  当用户提到「管家婆」「进销存」「开单/开销售单/开采购单」「查库存」「新增商品/建商品」「客户/供应商/往来单位」「出入库」「gjp」等，需要在该系统里做操作时使用。
   前置：需已安装 gjp CLI 并执行 gjp auth login。所有命令默认输出 JSON。
 ---
 
@@ -96,13 +96,92 @@ gjp product create \
 例：`gjp product create -n "可口可乐1L" -c KL001 -u 瓶 --cost 3 --sale 5 --standard "1L"`
 输出：`{success, id, usercode, message}`。编号重复时 `success:false, message:"商品编号重复"`。
 
+## 客户/供应商（customer）
+
+往来单位（客户、供应商、其它）的新增、查询、停用/启用。
+
+### 查列表
+```bash
+gjp customer list [-k <关键字>] [-t customer|supplier|all] [-n <条数>] [--include-stopped]
+```
+`-t customer` 只看客户，`-t supplier` 只看供应商，默认 `all`。
+
+### 查详情（含应收/应付余额）
+```bash
+gjp customer get --id <往来单位ID>
+```
+
+### 新建客户/供应商
+```bash
+gjp customer create \
+  -n <全名> -t <customer|supplier> \   # 必填
+  [-c 编号]            # 不传则自动取 max+1
+  [-s 简称] [--category 分类名] [--contact 联系人] [--phone 电话] \
+  [--area 地区] [--address 详细地址] [--memo 备注]
+```
+例：
+```bash
+gjp customer create -n "万达超市" -t customer --phone 13800000000 --contact 王经理
+gjp customer create -n "光明批发" -t supplier --contact 李总 --phone 13900000000
+```
+输出：`{success, id, usercode, message}`。
+
+> 💡 `--phone`/`--contact`/`--area`/`--address`：电话/联系人/地址由 `customer create` 内部自动经 `deliverinfo/batchSave` 保存（会回填客户记录的电话字段），传入即生效。`--area` 格式「省/市/区/街道」。
+
+### 更新已有客户的电话/地址
+```bash
+gjp customer contact --id <ID> [--phone ...] [--contact ...] [--area ...] [--address ...]
+```
+例：`gjp customer contact --id 1904... --phone 13800138000 --contact 王经理`
+输出：`{success, deliverinfoId, message}`。
+
+### 停用 / 启用
+```bash
+gjp customer stop   --ids <ID,ID,... 或 JSON数组>
+gjp customer enable --ids <ID,ID,... 或 JSON数组>
+```
+输出：`{success, message:"已停用"|"已启用"}`。
+
+**注意**：
+- 新建往来单位会在真实系统产生数据，调试时优先用 `customer list` 确认是否已存在同名单位。
+- 客户/供应商的 `priceLevel`、`accType` 等差异由 CLI 按 `-t` 自动处理，无需手填。
+- 发货地址（deliverinfo）默认不写；往来单位本身建好即可用于开单。
+
 ## 库存（stock）
 
 > 待实现。后续会提供：`gjp stock query --warehouse <仓> [--keyword <商品>]`、`gjp stock list` 等。
 
 ## 采购（purchase）
 
-> 待实现。结构与销售高度相似（vchtype=Purchase），用 inDetail。
+### 开采购入库单
+
+```bash
+gjp purchase create \
+  -w <仓库名> \              # 可选，默认第一个仓库
+  -s <供应商名> \             # 必填
+  --items '<JSON明细>' \      # 必填
+  [--memo 备注] \
+  [--date YYYY-MM-DD] \       # 默认今天
+  [--force]                   # confirm:true，绕过「价格为0」等需确认异常
+```
+
+`--items` 同销售，每项 `{name, qty, price}`（price 为采购单价）：
+
+```bash
+gjp purchase create -s 光明批发 \
+  --items '[{"name":"可口可乐","qty":48,"price":2.8},{"name":"雪碧","qty":24,"price":2.8}]'
+```
+
+**输出**：与销售同结构 `{success, billNumber, vchcode, total, needsConfirm, exceptions}`，单据号前缀 `CR-`。
+
+**异常处理**（与销售不同）：
+- `needsConfirm: true` + `exceptions` 含 `COST_BATCH_ERROR`（价格为0）时，单据已存草稿；加 `--force` 置 `confirm:true` 重提即落库。
+- 采购的 `--force` 机制是 `confirm:true`（销售是 `needValidation:false`，二者不同）。
+
+**只解析不建单**：
+```bash
+gjp purchase create -s 光明批发 --items '[{"name":"可口可乐","qty":1,"price":2.8}]' --dry-run
+```
 
 ## 报表（report）
 
