@@ -154,6 +154,23 @@ export class JxcClient {
     return picked;
   }
 
+  /** 资金账户名（现金/银行存款…）→ {id, fullname, usercode}（走 baseinfo/atype/pagelist） */
+  async resolveAccount(name: string): Promise<{ id: string; fullname: string; usercode: string }> {
+    const data = await this.call<{ list: { id: string; fullname: string; usercode: string }[] }>(
+      "baseinfo/atype/pagelist",
+      {
+        refresh: true,
+        queryParams: { currentPage: 1, filterKey: "quick", filterValue: name, showClass: false, stoped: false, typeId: null, parTypeId: "00001" },
+        pageSize: 50, pageIndex: 1,
+      },
+    );
+    const list = data.list ?? [];
+    const exact = list.find((a) => a.fullname === name);
+    const picked = exact ?? list[0];
+    if (!picked) throw new ApiError(`未找到资金账户"${name}"`, "NOT_FOUND");
+    return { id: picked.id, fullname: picked.fullname, usercode: picked.usercode };
+  }
+
   /** 商品 → {skuId, unitId}（先取单位再取 SKU） */
   async resolveSku(ptypeId: string): Promise<{ skuId: string; unitId: string }> {
     const unitsData = await this.call<Record<string, { id: string; unitName: string }[]>>(

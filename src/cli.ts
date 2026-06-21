@@ -9,6 +9,9 @@ import { purchaseGroup } from "./commands/purchase.ts";
 import { productGroup } from "./commands/product.ts";
 import { customerGroup } from "./commands/customer.ts";
 import { billGroup } from "./commands/bill.ts";
+import { stockGroup } from "./commands/stock.ts";
+import { financeGroup } from "./commands/finance.ts";
+import { reportGroup } from "./commands/report.ts";
 
 const main = defineCommand({
   meta: {
@@ -23,6 +26,9 @@ const main = defineCommand({
     product: productGroup,
     customer: customerGroup,
     bill: billGroup,
+    stock: stockGroup,
+    finance: financeGroup,
+    report: reportGroup,
   },
 });
 

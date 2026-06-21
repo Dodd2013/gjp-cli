@@ -27,35 +27,41 @@
 
 ## 📋 前置要求
 
-- [Bun](https://bun.sh/) 1.2+ 运行时
+- [Node.js](https://nodejs.org/) 18+ 运行时
 - 一个网上管家婆云进销存账号（你自己公司的）
+
+> 💡 仅在**开发/构建**本项目时才需要 [Bun](https://bun.sh/) 1.2+；日常使用 `gjp` 命令只需 Node.js。
 
 ## 🚀 安装
 
-### 1. 克隆并安装 CLI
+### 方式一：npm 全局安装（推荐）
 
 ```bash
-git clone <your-repo-url> gjp-cli
-cd gjp-cli
-bun install
-
-# 注册全局命令 gjp（任选其一）
-bun link                      # 方式 A：bun link
-# 或
-sudo ln -sf "$(pwd)/bin/gjp.js" /usr/local/bin/gjp   # 方式 B：软链到 PATH
-```
-
-验证：
-
-```bash
+npm install -g gjp
 gjp --version   # 应输出 0.1.0
 ```
 
-### 2.（可选）安装 Claude Code Skill
+### 方式二：克隆仓库（开发 / 贡献）
+
+```bash
+git clone https://github.com/Dodd2013/gjp-cli.git gjp-cli
+cd gjp-cli
+bun install
+bun run build            # 生成 dist/cli.js（Node bundle）
+bun link                 # 注册全局命令 gjp（需 Bun）
+```
+
+> npm 安装的版本走 Node bundle（`dist/cli.js`）；克隆仓库开发可用 `bun run src/cli.ts` 直接跑源码。
+
+### （可选）安装 Claude Code Skill
 
 让 AI 能自动调用 `gjp` 操作进销存：
 
 ```bash
+# npm 全局安装的用户：
+ln -sf "$(npm root -g)/gjp/skill/gjp" ~/.claude/skills/gjp
+
+# 克隆仓库的用户：
 ln -sf "$(pwd)/skill/gjp" ~/.claude/skills/gjp
 ```
 
@@ -123,11 +129,10 @@ gjp sales create \
 
 ### 待实现
 
-- 📥 采购入库（`gjp purchase ...`）
-- 📦 库存查询（`gjp stock ...`）
+- 📦 库存盘点（`gjp stock ...`）
 - 📊 报表（`gjp report ...`）
 
-> 进度与开发计划见 [`CLAUDE.md`](CLAUDE.md)。
+> 已实现：销售出库、采购入库/退货/删除、商品 CRUD、往来单位 CRUD、单据中心查询。各命令完整参数与 JSON 输出结构见 [`skill/gjp/SKILL.md`](skill/gjp/SKILL.md) 与 [`CLAUDE.md`](CLAUDE.md)。
 
 ## 🤖 给 AI 用（Skill）
 

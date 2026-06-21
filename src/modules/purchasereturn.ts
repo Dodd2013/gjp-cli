@@ -14,16 +14,11 @@
  *   3. 填充 warehouse/supplier/outDetail → submitBill
  *   4. 处理 CONFIRM 异常（--force 置 confirm:true）
  */
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
 import { JxcClient } from "../api/client.ts";
 
 // HAR 真实生效的采购退货明细行模板（196 字段，outDetail），仅覆盖动态字段
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const outDetailTemplate = JSON.parse(
-  readFileSync(join(__dirname, "templates", "purchasereturn-outdetail-line.json"), "utf-8"),
-) as Record<string, unknown>;
+import outDetailTemplateRaw from "./templates/purchasereturn-outdetail-line.json";
+const outDetailTemplate = outDetailTemplateRaw as Record<string, unknown>;
 
 export interface PurchaseReturnItemInput {
   /** 商品全名 */

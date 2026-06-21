@@ -37,9 +37,9 @@
 | 分组 | vchtype 码 | 含义 | 单据号前缀示例 |
 |------|-----------|------|--------------|
 | 采购 | 1000 / 1100 / 1200 | 采购入库/采购退货(BuyBack)等 | `CR-`(入库) · `CT-`(退货) |
-| 销售 | 2000 / 2100 / 2200 | 销售/退货等 | `PXX-` |
-| 库存 | 3000 / 3100 / 3200 / 3300~3303 | 调拨/调价/组装/报损报溢/其它出入库 | `SK-` 等 |
-| 财务 | 4000~4010 / 4014 / 4017 | 收付款/费用/固定资产等 | — |
+| 销售 | 2000 / 2100 / 2200 | 销售(Sale)/销售退货(SaleBack)等 | `PXX-`(销售) · `PXT-`(销售退货) |
+| 库存 | 3000 / 3100 / 3200 / 3300~3303 | 调拨/调价/组装/报损报溢/其它出入库 | — |
+| 财务 | 4000~4010 / 4014 / 4017 | 收付款/费用/固定资产等 | `SK-`(收款) · `FK-`(付款) |
 | 其它 | 9802 | 普通业务 | — |
 
 > 单据中心查询传 `vchtypes:[...]`（数组，可多值）。`gjp bill list --type purchase|sale|stock|finance|all` 即按上述分组展开。
@@ -419,12 +419,13 @@ gjp sales create \
 | 业务 | 需要的操作 | 预期接口 |
 |------|-----------|---------|
 | ~~采购入库~~ | ~~新建采购单~~ | ✅ 已实现（见 §9，vchtype=Buy） |
+| ~~库存查询~~ | ~~库存状况/明细分布~~ | ✅ 已实现（见 §11，`analysiscloud/inventorySituation|inventoryBatch`） |
+| ~~财务收付款~~ | ~~收款单/付款单~~ | ✅ 已实现（见 §12，`finance/getBill`+`finance/submitBill`） |
+| ~~往来应收应付~~ | ~~应收应付汇总/对账~~ | ✅ 已实现（见 §12，`analysiscloud/btypeAnalyse|accountReconciliation`） |
+| ~~利润报表~~ | ~~利润表~~ | ✅ 已实现（见 §13，`accounting/incomeReport`） |
+| ~~销售退货~~ | ~~销售退货单~~ | ✅ 已实现（见 §14，vchtype=SaleBack） |
 | 库存盘点 | 盘点单增删改 | `recordsheet/stocktake/*` |
-| 库存查询列表 | 多商品/多仓库汇总 | `recordsheet/report/*` |
-| 财务收付款 | 收款单/付款单 | `finance/*` |
-| 报表 | 进销存报表、利润报表 | `report/*` |
-| 单据列表查询 | 按条件查历史单据 | `goodsBill/list`（待确认） |
-| 单据删除/红冲 | 删除、退货 | `goodsBill/delete`、红字单 |
+| 单据删除/红冲 | 删除、红字单 | 红字单（采购单删除见 §9.4） |
 
 **每个新 HAR 样例可补全一个模块的完整接口。**
 
@@ -453,12 +454,23 @@ recordsheet/       accBusinessType/list, basePtypeUnit/findFirstPtypeFullbarcode
                    billsetting/getSwitchList, customConfig/list, giftType/list,
                    goodsBill/getBillByVchcode·submitBill, ktype/getKtypeProcessInfo,
                    orderBill/getOrderOccupyAdvanceTotal,
+                   postBill/listPostBill,
                    ptype/baselist·ptypelist·getBatchPtypeSku·getBatchPtypeTierPrice·
                          getBindPtypePositionList·getPtypePrice·getPtypePriceAndCost·getStockQty,
+                   finance/getBill·submitBill·modifyCheck, billCore/deleteBill,
                    sys/afterLogin
+
+analysiscloud/     inventorySituation/list·count·pageCount,
+                   inventoryBatch/listInventoryPosition·count,
+                   btypeAnalyse/listBtypeAnalyse·count,
+                   accountReconciliation/listNewAccountReconciliation·count,
+                   accountReconciliation/share/listPreAndCurTotal
+
+accounting/        incomeReport/getCurrentIncomeReportDynamicShow·hasAllOtypeLimited,
+                   logs/addPubSystemLog
 ```
 
-> 模块映射：`auth`（鉴权）、`sales`（销售单）、`purchase`（采购单）、`product`（商品）、`customer`（往来单位/客户/供应商）已在 CLI 实现。
+> 模块映射：`auth`（鉴权）、`sales`（销售单+退货）、`purchase`（采购单+退货+删除）、`product`（商品）、`customer`（往来单位）、`bill`（单据中心）、`stock`（库存）、`finance`（应收应付/对账/收付款）、`report`（利润表）均已在 CLI 实现。
 
 ---
 
@@ -887,5 +899,239 @@ CLI：`gjp bill types [--all]`（默认排除 `stoppedInVchtype:true`）。
 
 请求体空 `{}`。响应 `data[]`：`{modeName, modeCode}`（1普通销售/2车销销售/3巡店销售/4委托销售/5网店销售/6门店销售）。对应 listPostBill 的 `saleModeList`。
 
+---
 
+## 11. 库存模块（来自 库存状况和库存明细分布.har）
 
+两个查询接口（都属 `analysiscloud/`）：库存状况（按商品汇总）+ 明细库存分布（按商品×库位拆分）。查询入参用 **`ktypeIdss`（双 s，仓库 ID 数组）** 过滤仓库。
+
+### 11.1 库存状况 `POST /jxc/analysiscloud/inventorySituation/list` ★★
+
+按商品汇总的库存（现存量/可销量/可发量/成本总额/售价总额）。
+
+```jsonc
+{
+  "refresh": true,
+  "queryParams": {
+    "stockMode": 2, "selectType": 0, "bigData": false, "isPC": "true",
+    "filterKey": "quick", "filterValue": "<商品关键字>",   // 名称/编号/条码
+    "ktypeIdss": ["<ktypeId>"],                  // 仓库 ID 数组；null=全部仓库
+    "ptypeShowZeroQtyFilter": 0,                 // 0=过滤零库存 1=含零库存
+    "costModeFilter": -1, "unitQuery": 2, "ptypeFilterType": 0,
+    "showSkuStop": -1, "inventoryType": "qualityInventory",
+    "positionVisible": false
+  },
+  "pageSize": 17, "pageIndex": 1, "sorts": null, "orders": null
+}
+```
+
+响应 `data.list[]` 关键字段：`ptypeId`/`pFullname`/`shortname`/`usercode`/`unitName`/`standard`/`fullbarcode`、`qty`(现存量/可用)、`stockQty`(实物库存)、`saleableQty`(可销售)、`sendableQty`(可发货)、`inventoryTransQty`(在途)、`estimatedCostTotal`(成本总额)、`prepriceTotal`(售价总额)、`stoped`。
+> `data.total` 常返回 `"-1"`（bigData 查询未汇总总数），以 `list.length` 为准。
+
+CLI：`gjp stock status [-k 关键字] [-w 仓库名] [--include-zero] [-n 条数]`。
+
+### 11.2 明细库存分布 `POST /jxc/analysiscloud/inventoryBatch/listInventoryPosition` ★★
+
+按**商品 × 库位（仓库/批次/库位）**拆分的明细。
+
+```jsonc
+{
+  "refresh": true,
+  "queryParams": {
+    "stockMode": 2, "bigData": false, "isPC": "true",
+    "filterKey": "quick", "filterValue": "<关键字>",
+    "ktypeIdss": ["<ktypeId>"],                  // 仓库过滤
+    "batchPtypeIds": null, "ptypeFilterType": 0,
+    "showDefaultStock": 0, "costModeFilter": -1, "unitQuery": 2,
+    "skuId": 0, "btypeId": null, "outKtypePointId": null
+  },
+  "pageSize": 18, "pageIndex": 1, "sorts": null, "orders": null
+}
+```
+
+响应 `data.list[]` 关键字段：`ptypeId`/`pFullname`/`usercode`/`unitName`、`kfullname`/`ktypeFullname`(仓库)、`batchno`(批次)、`position`(库位)、`stockQty`(该库位实物库存)、`qty`(可用)、`estimatedCostTotal`(成本总额)。
+
+CLI：`gjp stock position [-k 关键字] [-w 仓库名] [-n 条数]`。
+
+### 11.3 仓库列表 `POST /jxc/baseinfo/ktype/pagelist` ★
+
+同 §2.1。CLI：`gjp stock warehouses`（库存查询前选仓库用）。
+
+---
+
+## 12. 财务模块（来自 往来单位应收应付.har · 付款单新增&修改.har · 收款单.har）
+
+四类能力：往来单位应收应付汇总、往来对账明细、付款单、收款单。
+
+### 12.1 应收应付汇总 `POST /jxc/analysiscloud/btypeAnalyse/listBtypeAnalyse` ★★
+
+按客户/供应商汇总应收/应付/预收/预付余额。
+
+```jsonc
+{
+  "refresh": true,
+  "queryParams": {
+    "bigData": false, "filter": "<名称关键字>",
+    "btypeId": null,
+    "bcategory": 0,            // 0=客户(应收) 1=供应商(应付) null=全部
+    "btypeStopType": 0,
+    "btypeZeroFilter": 0,      // 0=过滤零余额 1=含零余额
+    "cooperationType": 0, "partypeid": null
+  },
+  "pageSize": 17, "pageIndex": 1, "sorts": null, "orders": null
+}
+```
+
+响应 `data.list[]` 关键字段：`btypeId`/`bFullName`/`bcategory`/`bcategoryName`、`arTotal`(应收，客户欠我)、`apTotal`(应付，我欠供应商)、`prTotal`(预收)、`ppTotal`(预付)、`availablePrTotal`、`person`/`tel`/`stoped`。
+
+CLI：`gjp finance arrears [-t customer|supplier|all] [-k 关键字] [--include-zero] [-n 条数]`。
+
+### 12.2 往来对账明细 `POST /jxc/analysiscloud/accountReconciliation/listNewAccountReconciliation` ★★
+
+某往来单位的单据级对账（每张单据的金额/已核销/未核销余额）。
+
+```jsonc
+{
+  "refresh": true,
+  "queryParams": {
+    "filterKey": "quick", "filterValue": "",
+    "btypeId": "<往来单位ID>",                     // 必填
+    "vchTypes": [1000,1100,1200,2000,2100,2200,4000,4001,4002,...], // 覆盖采购/销售/财务
+    "reconciliationStartDate": "2026-06-01T00:00:00.000Z",   // UTC ISO
+    "reconciliationEndDate":   "2026-06-21T23:59:59.000Z",
+    "type": 1,                  // 1=按单据明细
+    "groupFilter": -1, "reconciliationFilter": -1, "redbillState": -1, "orderGroupNo": 0
+  },
+  "pageSize": 16, "pageIndex": 1, "sorts": null, "orders": null
+}
+```
+
+响应 `data.list[]` 关键字段：`billNumber`/`vchcode`/`vchtype`/`businessName`(普通销售/采购入库/收款/付款…)、`billDate`、`billTotal`(单据金额)、`billPaymentTotal`(已核销)、`billPaymentRemainTotal`(未核销余额)、`summary`。
+
+> 辅助接口 `accountReconciliation/share/listPreAndCurTotal {btypeId,vchTypes,...}` 返回 `{dqArOrApTotal}`(当期应收/应付总额)。
+
+CLI：`gjp finance reconciliation --party <对方单位名> [--from --to] [-n 条数]`。
+
+### 12.3 付款单 / 收款单 `POST /jxc/recordsheet/finance/submitBill/` ★★★
+
+收付款共用 `finance/submitBill/`（注意是 `finance/` 不是 `goodsBill/`），差异：
+
+| 项 | 付款单（Payment） | 收款单（Receiving） |
+|----|------------------|--------------------|
+| `vchtype` / `intVchtype` | `Payment` / **4002** | `Receiving` / **4001** |
+| 单据号前缀 | `FK-` | `SK-` |
+| btype | 供应商（`resolveSupplier`） | 客户（`resolveCustomer`） |
+| `balanceReverse` | `true` | `false` |
+| 模板获取 | `finance/getBill {vchtype:"Payment"}` | `finance/getBill {vchtype:"Receiving"}` |
+
+> 🔑 `finance/getBill {vchtype, businessType:"PaymentNormal", customType:0}` **独立分配** 新的 `vchcode`+`number`+`date`（实测：FK-...00002 / SK-...00003 紧接上次序号），无需先调 `billNumber/updateBillNumber`（与货物单据 `getBillByVchcode` 一致）。
+
+请求体关键字段（精简，其余由 getBill 模板提供）：
+
+```jsonc
+{
+  "vchtype": "Payment", "intVchtype": 4002, "businessType": "PaymentNormal",
+  "billType": "finance",
+  "vchcode": "1905...", "number": "FK-20260621-00002",   // 来自 getBill
+  "btypeId": "1904594932357963155", "bfullname": "供应商1111",   // 付款=供应商
+  "etypeId": "<员工ID>", "efullname": "管理员",                  // 业务员/制单人
+  "currencyBillTotal": 22,                                       // = accountDetail 合计
+  "accountDetail": [                  // 资金账户明细（金额落点）
+    { "atypeId":"1265029598616543238", "atypeFullName":"现金", "atypeUserCode":"100101",
+      "taxRate":0, "total":22, "memo":"货款" }
+  ],
+  "balanceBillDetail": [],            // 核销明细：空=不核销具体单据，直接冲减往来余额
+  "summary": "货款", "memo": "货款", "source": "手工新增",
+  "date": "2026-06-21T01:56:33.000Z",
+  "postState": "PROCESS_COMPLETED", "oldPostState": 0, "saveModel": "SAVE_NEW",
+  "needValidation": true, "balanceReverse": true
+}
+```
+
+响应：`{vchcode, billNumber:"FK-...", resultType:"SUCCESS", postState:800}`。
+
+> 资金账户（`atype`，如 现金/银行存款）由 `baseinfo/atype/pagelist {parTypeId:"00001"}` 解析（返回 `id`/`fullname`/`usercode`）。
+
+CLI：`gjp finance payment -s <供应商> --amount <金额> [-a 现金] [--memo 货款] [--date]`；`gjp finance receipt -c <客户> --amount <金额> ...`。两者都支持 `--dry-run`。
+
+---
+
+## 13. 报表模块（来自 本月利润.har）
+
+### 13.1 利润表 `POST /jxc/accounting/incomeReport/getCurrentIncomeReportDynamicShow` ★★
+
+利润表（按月发生额）：收入类 − 支出类 = 利润。
+
+```jsonc
+{
+  "refresh": true,
+  "queryParams": {
+    "period": "202606",          // YYYYMM（本月）
+    "atypeLevel": 2, "atypeFilter": 1,
+    "multiOtypeId": [], "dimensionType": 1, "showCheck": false
+  },
+  "pageSize": 21, "pageIndex": 1, "sorts": null, "orders": null
+}
+```
+
+响应 `data.list[]`（按会计科目层级铺平）：每项 `{typeid, fullname, monthPeriodTotal, yearPeriodTotal, partypeid}`。
+- `typeid:"00003"` = 【收入类】根（`monthPeriodTotal` 即收入合计）
+- `typeid:"00004"` = 【支出类】根（支出合计）
+- `typeid:null` + `fullname:"利润"` = 利润行（收入−支出）
+- 其余为子科目（『销售收入』/『销售成本』/『费用合计』…），`partypeid` 指向父科目。
+
+CLI：`gjp report income [-p 202606] [--summary-only]`（`--summary-only` 只输出 `{period, revenue, expense, profit, yearProfit}`）。
+
+---
+
+## 14. 销售退货单模块（来自 新增销售退货单.har）
+
+销售出库单（§5）的**逆向流程**：客户把货退回（货入库）。复用 `goodsBill/submitBill`，差异：
+
+| 项 | 销售出库（Sale） | 销售退货（SaleBack） |
+|----|---------------|-------------------|
+| `vchtype` / `businessType` | `Sale` / `SaleNormal` | **`SaleBack`** / `SaleNormal` |
+| `intVchtype` | 2000 | **2100** |
+| 单据号前缀 | `PXX-` | **`PXT-`** |
+| 明细字段 | `outDetail`（出库） | **`inDetail`**（入库，退货=货回仓） |
+| btype | 客户（`resolveCustomer`） | 客户（同） |
+| 模板 | `getBillByVchcode{vchtype:"Sale"}` | **`{vchtype:"SaleBack"}`** |
+| CONFIRM 解除 | `needValidation:false`+`failedSaveUnconfirmed`+`allowZeroQty` | 同（销售家族机制） |
+
+> 即：把销售单的 `vchtype: Sale→SaleBack`、明细 `outDetail→inDetail`，其余（btype=客户、CONFIRM 机制、模板获取）与销售完全一致。
+
+### 14.1 销售退货单结构 `POST /jxc/recordsheet/goodsBill/submitBill` ★★★
+
+关键字段（仅列差异点，其余同 §4.3）：
+
+```jsonc
+{
+  "vchtype": "SaleBack", "businessType": "SaleNormal", "intVchtype": 2100,
+  "number": "PXT-20260621-00001",
+  "ktypeId": "1265029598679457792",      // 仓库
+  "btypeId": "1905059536147674207",      // 客户
+  "bfullname": "二货无敌",
+  "currencyBillTotal": 20,
+  "inDetail": [ /* 退货明细，196 字段/行，模板见 salesreturn-indetail-line.json */ ],
+  "outDetail": [],
+  "saveModel": "SAVE_NEW",
+  "needValidation": true                 // ★ --force 置 needValidation:false + failedSaveUnconfirmed:true + allowZeroQty:true
+}
+```
+
+`inDetail` 每行关键字段：`ptypeId`/`skuId`/`unitId`/`pFullName`/`unitQty`/`currencyPrice`(退货单价)/`currencyTotal`/`currencyDisedPrice`/`ktypeId`。
+> 与采购入库 inDetail 不同：销售退货 inDetail 的 `differenceQty` 为 null（出库概念，入库不设）。成本由服务端按库存现值回填。
+
+**响应**：`resultType:"SUCCESS"`、`postState:800`、`inDetailIds:{"0":"..."}`（印证走 inDetail）。
+
+### 14.2 业务流程示例：创建销售退货单
+
+```
+1. goodsBill/getBillByVchcode {vchtype:"SaleBack",copyTypeEnum:DEFAULT}  → 取模板(含 vchcode+number)
+2. btype/list {bcategory:0}         → 选客户
+3. ktype/pagelist                   → 选仓库
+4. ptype/getBatchPtypeSku           → 每个商品取 SKU/单位
+5. goodsBill/submitBill (inDetail)  → 保存；库存不足等 → CONFIRM → --force 重提落库
+```
+
+CLI：`gjp sales return -c <客户> --items '<JSON>' [-w 仓库] [--memo] [--date] [--force] [--dry-run]`。

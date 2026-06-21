@@ -32,8 +32,8 @@ gjp-cli/
 │   ├── auth/          login.ts(登录+getAuthenticatedClient) · test-login.ts(参考)
 │   ├── api/           client.ts(JxcClient：/jxc 调用 + 名称→ID 解析)
 │   ├── store/         paths.ts · credentials.ts(0600) · session.ts(持久化+过期检测)
-│   ├── modules/       ← 业务逻辑层（按 HAR 逐步新增）：sales.ts purchase.ts product.ts customer.ts · templates/*.json
-│   ├── commands/      ← CLI 命令层（参数解析+调用模块+输出）：auth/sales/purchase/product/customer.ts · shared.ts(output/die/parseItems/parseIds)
+│   ├── modules/       ← 业务逻辑层（按 HAR 逐步新增）：sales.ts salesreturn.ts purchase.ts purchasereturn.ts product.ts customer.ts bill.ts stock.ts finance.ts report.ts · templates/*.json
+│   ├── commands/      ← CLI 命令层（参数解析+调用模块+输出）：auth/sales/purchase/product/customer/bill/stock/finance/report.ts · shared.ts(output/die/parseItems/parseIds)
 │   ├── cli.ts         ← citty 入口，仅装配命令树（import 5 个 group + runMain）
 │   └── prompt.ts      readPassword(掩码) · readConfirm(y/N 二次确认)
 ├── docs/
@@ -154,11 +154,16 @@ gjp auth whoami                              # 验证会话+业务接口可用
 # 测试
 bun test
 
+# 重新打包（新增/修改命令后必须 rebuild，否则全局 gjp 跑的是旧 dist）
+bun run build          # → dist/cli.js（bin/gjp.js 引用它，--target=node）
+
 # 方案文档本地预览
 cd docs && python3 -m http.server 8848      # http://localhost:8848/implementation-plan.html
 ```
 
-## 当前进度（2026-06-20）
+> ⚠️ **打包陷阱**：`bin/gjp.js` 跑的是 `dist/cli.js`（打包产物），**不是** `src/cli.ts` 直接执行。新增命令组/子命令后必须 `bun run build` 重新打包，否则全局 `gjp` 命令树是旧的。开发期临时验证可用 `bun run src/cli.ts <args>` 直接跑源码。
+
+## 当前进度（2026-06-21）
 
 - ✅ 鉴权全链路（登录/会话持久化/自动刷新/全局命令）—— 已用真实账号验证
 - ✅ `docs/API.md`（已识别接口，含销售出库单/商品/往来单位完整流程）
@@ -197,7 +202,27 @@ cd docs && python3 -m http.server 8848      # http://localhost:8848/implementati
   - `OrderSaleMode/list`：销售方式枚举（1普通/2车销/...，对应 saleModeList）
   - 注意：accBusinessType 里的 `vchtype` 字段编号（9001/9005 等）与 listPostBill 的 `vchtypes`（2000/3000 等）**两套编号**，可靠的 key 是 `businessType`/`businessCode`/`name`；结果里 `businessTypeName` 自描述
   - 新增 `client.ts: resolveBtype`（不限客户/供应商，单据中心按对方查用）
-- ⬜ 待补 HAR 样例：库存盘点 / 报表 / 财务
+- ✅ **业务命令 `stock status/position/warehouses`**（来自 `库存状况和库存明细分布.har`）—— **只读命令线上实测通过**（自动重登后返回真实库存：测试新增商品001 qty=4）
+  - 库存状况 `analysiscloud/inventorySituation/list`（按商品汇总：现存量/可销量/可发量/成本/售价总额），明细分布 `analysiscloud/inventoryBatch/listInventoryPosition`（按商品×库位拆分）
+  - 🔑 库存查询用 **`ktypeIdss`（双 s，仓库 ID 数组）** 过滤仓库（不是 ktypeId）；`inventoryType:"qualityInventory"`；`data.total` 常返回 `"-1"`（bigData 未汇总），以 list.length 为准
+  - 仓库列表复用 `ktype/pagelist`（`stock warehouses`）
+- ✅ **业务命令 `finance arrears/reconciliation/payment/receipt`**（来自 `往来单位应收应付.har`+`付款单新增&修改.har`+`收款单.har`）
+  - 应收应付汇总 `analysiscloud/btypeAnalyse/listBtypeAnalyse`：`bcategory` 0=客户(应收)/1=供应商(应付)/null=全部，`btypeZeroFilter` 控制零余额；返回 arTotal/apTotal/prTotal(预收)/ppTotal(预付)
+  - 对账明细 `analysiscloud/accountReconciliation/listNewAccountReconciliation`：入参 `btypeId`+`vchTypes`(覆盖采购/销售/财务)+`reconciliationStartDate/EndDate`(UTC ISO)+`type:1`；返回 billTotal/billPaymentTotal(已核销)/billPaymentRemainTotal(未核销)
+  - 🔑 **收付款单走 `recordsheet/finance/submitBill/`（注意是 `finance/` 不是 `goodsBill/`）**：付款 `Payment`(intVchtype 4002, FK-, btype=供应商, balanceReverse:true) / 收款 `Receiving`(intVchtype 4001, SK-, btype=客户, balanceReverse:false)，businessType 都是 `PaymentNormal`
+  - 🔑 **`finance/getBill {vchtype,businessType:"PaymentNormal",customType:0}` 独立分配新 vchcode+number+date**（实测 FK-...00002/SK-...00003 紧接上次序号），无需先调 `billNumber/updateBillNumber`（与货物单据 getBillByVchcode 同构）
+  - 金额经 `accountDetail`（资金账户 atypeId+total）登记，`balanceBillDetail:[]` 不核销具体单据（直接冲减往来余额）；资金账户由 `baseinfo/atype/pagelist {parTypeId:"00001"}` 解析（新增 `client.ts: resolveAccount`，默认"现金"）
+  - 业务员/制单人取当前员工（etype/getform）；写命令 dry-run 解析的 ID 与 HAR **完全一致**（供应商 1904594932357963155 / 客户 1905059536147674207 / 现金 1265029598616543238），getBill 分配验证通过；**未做真实建单实测**（产生真实财务记录，CLI 暂无收付款单删除命令，需用户授权后再测）
+- ✅ **业务命令 `report income`**（来自 `本月利润.har`）—— **只读命令线上实测通过**（revenue 113.8 / expense 46.58 / profit 67.22，与 HAR 吻合）
+  - 利润表 `accounting/incomeReport/getCurrentIncomeReportDynamicShow`：入参 `period:"YYYYMM"`+`atypeLevel:2`+`atypeFilter:1`；返回按科目层级铺平的 list
+  - 🔑 收入合计=`typeid:"00003"` 的 monthPeriodTotal，支出合计=`typeid:"00004"`，利润=`typeid:null && fullname:"利润"`；`--summary-only` 只输出 {period,revenue,expense,profit,yearProfit}
+- ✅ **业务命令 `sales return`**（来自 `新增销售退货单.har`）—— 销售出库单的逆向流程，镜像 `sales.ts`
+  - vchtype/businessType/intVchtype = **`SaleBack`/`SaleNormal`/2100**（出库是 Sale/2000），单据号前缀 **`PXT-`**（出库 PXX-），明细用 **`inDetail`（退货=货入库）**，btype=客户不变
+  - CONFIRM 机制同销售（needValidation:false+failedSaveUnconfirmed+allowZeroQty），不是采购的 confirm:true
+  - 模板 `getBillByVchcode{vchtype:"SaleBack"}`；inDetail 行模板 `src/modules/templates/salesreturn-indetail-line.json`（196 字段，`differenceQty` 为 null，出库概念入库不设）
+  - dry-run 解析的 ptypeId/skuId/unitId 与 HAR **完全一致**；对账明细里可见用户原始 HAR 抓的 `PXT-20260621-00001` 真实存在，印证流程
+  - 实现镜像 sales：`src/modules/salesreturn.ts` + `src/commands/sales.ts` 加 `return` 子命令
+- ⬜ 待补 HAR 样例：库存盘点 / 单据红冲
 
 ## 安全说明
 

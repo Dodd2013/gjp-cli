@@ -1,7 +1,7 @@
 ---
 name: gjp
-description: 通过 gjp CLI 操作网上管家婆（wsgjp）进销存系统——开销售/采购单、查库存、管商品、管客户/供应商、单据中心查历史单据、查报表等。
-  当用户提到「管家婆」「进销存」「开单/开销售单/开采购单」「查库存」「新增商品/建商品」「客户/供应商/往来单位」「查单据/单据中心/历史单据」「出入库」「gjp」等，需要在该系统里做操作时使用。
+description: 通过 gjp CLI 操作网上管家婆（wsgjp）进销存系统——开销售/采购单（含退货）、查库存、管商品、管客户/供应商、单据中心查历史单据、查应收应付/对账、收付款单、查利润报表等。
+  当用户提到「管家婆」「进销存」「开单/开销售单/开采购单」「销售退货/采购退货」「查库存/库存状况/库存明细」「新增商品/建商品」「客户/供应商/往来单位」「查单据/单据中心/历史单据」「应收/应付/对账」「付款单/收款单」「利润/报表」「出入库」「gjp」等，需要在该系统里做操作时使用。
   前置：需已安装 gjp CLI 并执行 gjp auth login。所有命令默认输出 JSON。
 ---
 
@@ -74,6 +74,22 @@ gjp sales create -c 万达超市 \
 ```bash
 gjp sales create -c 万达超市 --items '[{"name":"可口可乐","qty":1,"price":3.5}]' --dry-run
 ```
+
+### 开销售退货单（客户退回商品，货入库）
+
+销售出库单的**逆向流程**：参数结构与 `sales create` 一致，但生成 `PXT-` 退货单、增加库存。
+
+```bash
+gjp sales return \
+  -w <仓库名> \              # 可选，默认第一个仓库
+  -c <客户名> \              # 必填
+  --items '<JSON明细>' \      # 必填，每项 {name, qty, price}（price 为退货单价）
+  [--memo 备注] [--date YYYY-MM-DD] [--force] [--dry-run]
+```
+```bash
+gjp sales return -c 万达超市 --items '[{"name":"可口可乐","qty":2,"price":3.5}]'
+```
+**输出**：`{success, billNumber, vchcode, total, needsConfirm, exceptions}`，单据号前缀 `PXT-`。异常处理同 `sales create`（`--force` 绕过库存等需确认的异常）。
 
 ## 商品（product）
 
@@ -149,7 +165,58 @@ gjp customer enable --ids <ID,ID,... 或 JSON数组>
 
 ## 库存（stock）
 
-> 待实现。后续会提供：`gjp stock query --warehouse <仓> [--keyword <商品>]`、`gjp stock list` 等。
+查库存状况（按商品汇总）、明细库存分布（按商品×库位）、仓库列表。
+
+### 查库存状况（按商品汇总）
+```bash
+gjp stock status [-k <商品关键字>] [-w <仓库名>] [--include-zero] [-n <条数>]
+```
+例：`gjp stock status -k 可口可乐`、`gjp stock status -w 默认仓库 -n 50`
+**输出**：`{total, list:[{ptypeId, fullname, shortname, usercode, unitName, standard, qty(现存量), stockQty(实物库存), saleableQty(可销售), sendableQty(可发货), transQty(在途), costTotal(成本总额), prepriceTotal(售价总额), stoped}]}`。
+
+### 查明细库存分布（按商品 + 库位）
+```bash
+gjp stock position [-k <商品关键字>] [-w <仓库名>] [-n <条数>]
+```
+**输出**：`{total, list:[{ptypeId, fullname, unitName, warehouse, batchNo, position, stockQty, qty, costTotal}]}`。
+
+### 仓库列表
+```bash
+gjp stock warehouses
+```
+**输出**：`[{id, fullname, usercode}]`。
+
+## 财务（finance）
+
+应收应付汇总、往来对账明细、付款单、收款单。
+
+### 查应收应付汇总
+```bash
+gjp finance arrears [-t customer|supplier|all] [-k <关键字>] [--include-zero] [-n <条数>]
+```
+- `-t customer` 看应收（客户欠我），`-t supplier` 看应付（我欠供应商），默认 all。
+**输出**：`{total, list:[{id, name, type, arTotal(应收), apTotal(应付), prTotal(预收), ppTotal(预付), availablePrTotal, person, tel, stoped}]}`。
+
+### 查往来对账明细（某客户/供应商的单据级明细）
+```bash
+gjp finance reconciliation --party <对方单位名> [--from YYYY-MM-DD] [--to YYYY-MM-DD] [-n <条数>]
+```
+默认本月。**输出**：`{total, list:[{billNumber, vchcode, vchtype, businessName, billDate, billTotal, settled(已核销), remain(未核销余额), summary}]}`。
+例：查某客户哪些单据还没收款 → `gjp finance reconciliation --party 万达超市`，看 `remain>0` 的行。
+
+### 创建付款单（付钱给供应商，FK- 前缀）
+```bash
+gjp finance payment -s <供应商名> --amount <金额> [-a 现金] [--memo 货款] [--date YYYY-MM-DD] [--dry-run]
+```
+`-a` 资金账户（现金/银行存款…，默认现金）。**输出**：`{success, billNumber, vchcode, amount, party, account, direction:"payment"}`。
+
+### 创建收款单（收客户钱，SK- 前缀）
+```bash
+gjp finance receipt -c <客户名> --amount <金额> [-a 现金] [--memo 货款] [--date YYYY-MM-DD] [--dry-run]
+```
+**输出**：`{success, billNumber, vchcode, amount, party, account, direction:"receipt"}`。
+
+> 💡 收付款默认**不核销具体单据**（直接冲减往来单位的应收/应付余额）。资金账户可用 `gjp finance payment -s X --amount 1 --dry-run` 查看。金额必须 >0。
 
 ## 采购（purchase）
 
@@ -250,7 +317,15 @@ gjp bill types [--all]    # 默认排除已停用；--all 含全部
 
 ## 报表（report）
 
-> 待实现。进销存报表、利润报表等。
+### 查利润表（本月发生额）
+```bash
+gjp report income [-p <YYYYMM>] [--summary-only]
+```
+- `-p` 期间如 `202606`，默认当前月。
+- `--summary-only` 只输出汇总（推荐，明细科目较多）。
+**输出**（summary）：`{period, revenue(收入), expense(支出), profit(利润), yearProfit(本年累计)}`。
+**输出**（完整）：额外含 `items:[{typeId, fullname, monthTotal, yearTotal, parentTypeId}]`（收入类 00003 / 支出类 00004 / 利润 等科目）。
+例：`gjp report income --summary-only` → `{period:"202606", revenue:113.8, expense:46.58, profit:67.22, yearProfit:0}`。
 
 ## 使用注意
 

@@ -8,15 +8,10 @@
  * - usercode（编号）需唯一；未传时用 getMaxUsercode+1 推算。
  * - btype/list 用 queryBcategoryList 过滤单位类别：[0]=客户 [1]=供应商 [3]=其它。
  */
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
 import { JxcClient, ApiError } from "../api/client.ts";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const btypeTemplate = JSON.parse(
-  readFileSync(join(__dirname, "templates", "btype-save.json"), "utf-8"),
-) as Record<string, unknown>;
+import btypeTemplateRaw from "./templates/btype-save.json";
+const btypeTemplate = btypeTemplateRaw as Record<string, unknown>;
 
 export type BtypeKind = "customer" | "supplier" | "all";
 

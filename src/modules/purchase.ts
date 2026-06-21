@@ -13,16 +13,11 @@
  *   3. 填充 warehouse/supplier/inDetail → submitBill
  *   4. 处理 CONFIRM 异常（--force 置 confirm:true）
  */
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
 import { JxcClient, ApiError } from "../api/client.ts";
 
 // HAR 真实生效的采购入库明细行模板（196 字段），仅覆盖动态字段
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const inDetailTemplate = JSON.parse(
-  readFileSync(join(__dirname, "templates", "purchase-indetail-line.json"), "utf-8"),
-) as Record<string, unknown>;
+import inDetailTemplateRaw from "./templates/purchase-indetail-line.json";
+const inDetailTemplate = inDetailTemplateRaw as Record<string, unknown>;
 
 export interface PurchaseItemInput {
   /** 商品全名 */

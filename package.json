@@ -1,12 +1,43 @@
 {
-  "name": "gjp-cli",
+  "name": "gjpcli",
   "version": "0.1.0",
+  "description": "管家婆进销存 CLI — 纯 HTTP，AI 友好（第三方非官方）",
   "type": "module",
+  "license": "MIT",
+  "author": "Dodd",
+  "homepage": "https://github.com/Dodd2013/gjp-cli#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Dodd2013/gjp-cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Dodd2013/gjp-cli/issues"
+  },
+  "keywords": [
+    "cli",
+    "进销存",
+    "管家婆",
+    "erp",
+    "gjp",
+    "ai"
+  ],
   "bin": {
-    "gjp": "./bin/gjp.js"
+    "gjp": "bin/gjp.js"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "skill",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
   },
   "scripts": {
     "login": "bun run src/auth/test-login.ts",
+    "build": "bun build src/cli.ts --target=node --outfile dist/cli.js",
+    "prepublishOnly": "bun run build",
     "test": "bun test"
   },
   "dependencies": {

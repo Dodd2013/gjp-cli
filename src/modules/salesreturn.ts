@@ -1,45 +1,50 @@
 /**
- * 销售模块：创建销售出库单。
+ * 销售退货模块：创建销售退货单（销售出库单的逆向流程）。
  *
- * 流程（见 docs/API.md 第 5 节）：
+ * 与销售出库单（sales.ts）同构，差异：
+ *   - vchtype/businessType = "SaleBack"/"SaleNormal"（intVchtype 2100，出库是 "Sale"/2000）
+ *   - 单据号前缀 PXT-（出库是 PXX-）
+ *   - 明细用 inDetail（退货=货退回入库），不是 outDetail
+ *   - btype 仍是客户（resolveCustomer）
+ *   - CONFIRM 异常机制同销售（needValidation:false + failedSaveUnconfirmed + allowZeroQty）
+ *
+ * 流程：
  *   1. 解析 仓库/客户/商品 → ID
- *   2. getBillByVchcode(DEFAULT) 取新单据模板（含 vchcode + number）
- *   3. 填充 warehouse/customer/outDetail → submitBill
- *   4. 处理 CONFIRM 异常（库存不足等）
+ *   2. getBillByVchcode(DEFAULT, SaleBack) 取新单据模板（含 vchcode + number）
+ *   3. 填充 warehouse/customer/inDetail → submitBill
+ *   4. 处理 CONFIRM 异常（--force）
  */
 import { JxcClient } from "../api/client.ts";
 
-// HAR 真实生效的销售明细行模板（199 字段），仅覆盖动态字段，保证服务端字段对齐
-import saleOutdetailTemplateRaw from "./templates/sale-outdetail-line.json";
-const saleOutdetailTemplate = saleOutdetailTemplateRaw as Record<string, unknown>;
+// HAR 真实生效的销售退货明细行模板（196 字段，inDetail），仅覆盖动态字段
+import inDetailTemplateRaw from "./templates/salesreturn-indetail-line.json";
+const inDetailTemplate = inDetailTemplateRaw as Record<string, unknown>;
 
-export interface SaleItemInput {
+export interface SaleReturnItemInput {
   /** 商品全名 */
   name: string;
-  /** 数量 */
+  /** 退货数量 */
   qty: number;
-  /** 单价（不含税） */
+  /** 退货单价（不含税） */
   price: number;
 }
 
-export interface CreateSaleInput {
+export interface CreateSaleReturnInput {
   /** 仓库名（默认取第一个） */
   warehouse?: string;
   /** 客户名 */
   customer: string;
   /** 明细 */
-  items: SaleItemInput[];
+  items: SaleReturnItemInput[];
   /** 备注 */
   memo?: string;
   /** 摘要 */
   summary?: string;
-  /** 业务类型，默认普通销售 */
-  businessType?: string;
   /** 单据日期 YYYY-MM-DD，默认今天 */
   date?: string;
 }
 
-export interface CreateSaleResult {
+export interface CreateSaleReturnResult {
   success: boolean;
   /** 单据号 */
   billNumber?: string;
@@ -47,7 +52,7 @@ export interface CreateSaleResult {
   vchcode?: string;
   /** 总金额 */
   total?: number;
-  /** 是否存在需确认的异常（如库存不足） */
+  /** 是否存在需确认的异常 */
   needsConfirm: boolean;
   /** 异常详情 */
   exceptions: { code: string; message: string }[];
@@ -55,8 +60,8 @@ export interface CreateSaleResult {
   raw?: unknown;
 }
 
-/** 构造一条 outDetail 明细行：克隆 HAR 真实模板，仅覆盖动态字段。保证服务端字段对齐。 */
-function buildOutDetailLine(opts: {
+/** 构造一条 inDetail 明细行：克隆 HAR 真实模板，仅覆盖动态字段 */
+function buildInDetailLine(opts: {
   ptypeId: string; skuId: string; unitId: string;
   fullname: string; usercode: string; shortname: string;
   qty: number; price: number;
@@ -66,9 +71,8 @@ function buildOutDetailLine(opts: {
   const { qty, price, ptypeId, skuId, unitId, ktypeId, kfullname, fullname, usercode, shortname, rowIndex } = opts;
   const lineTotal = +(price * qty).toFixed(10);
   const qtyStr = String(qty);
-  // 深拷贝模板（结构化克隆语义）
-  const line = JSON.parse(JSON.stringify(saleOutdetailTemplate)) as Record<string, unknown>;
-  // 覆盖商品/单位
+  const line = JSON.parse(JSON.stringify(inDetailTemplate)) as Record<string, unknown>;
+  // 商品/单位
   line.ptypeId = ptypeId;
   line.skuId = skuId;
   line.unitId = unitId;
@@ -77,12 +81,10 @@ function buildOutDetailLine(opts: {
   line.shortname = shortname;
   line.ktypeId = ktypeId;
   line.kfullname = kfullname;
-  // 默认单位字段对齐到当前 unitId
   line.stockDefaultUnit = unitId;
   line.buyDefaultUnit = unitId;
   line.saleDefaultUnit = unitId;
   line.retailDefaultUnit = unitId;
-  // sku 嵌套对象的 id 对齐
   if (line.sku && typeof line.sku === "object") {
     (line.sku as Record<string, unknown>).id = skuId;
   }
@@ -97,8 +99,8 @@ function buildOutDetailLine(opts: {
   line.comboRowId = rowIndex + 3;
   line.rowIndex = rowIndex;
   line.__rowIndex = rowIndex;
-  line.differenceQty = qty;
-  // 金额
+  // differenceQty 在 inDetail 模板里为 null（出库概念，入库不设）
+  // 金额（退货单价）
   line.currencyPrice = price;
   line.currencyTotal = lineTotal;
   line.currencyDisedPrice = price;
@@ -110,7 +112,10 @@ function buildOutDetailLine(opts: {
   return line;
 }
 
-export async function createSale(input: CreateSaleInput, opts: { force?: boolean } = {}): Promise<CreateSaleResult> {
+export async function createSaleReturn(
+  input: CreateSaleReturnInput,
+  opts: { force?: boolean } = {},
+): Promise<CreateSaleReturnResult> {
   const api = new JxcClient();
   await api.init();
 
@@ -122,7 +127,7 @@ export async function createSale(input: CreateSaleInput, opts: { force?: boolean
     input.items.map(async (item, i) => {
       const product = await api.resolveProduct(item.name, warehouse.id);
       const { skuId, unitId } = await api.resolveSku(product.id);
-      return buildOutDetailLine({
+      return buildInDetailLine({
         ptypeId: product.id, skuId, unitId,
         fullname: product.fullname, usercode: product.usercode, shortname: product.shortname ?? product.fullname,
         qty: item.qty, price: item.price,
@@ -133,54 +138,55 @@ export async function createSale(input: CreateSaleInput, opts: { force?: boolean
   );
 
   const total = +input.items.reduce((s, it) => s + it.qty * it.price, 0).toFixed(10);
-  const businessType = input.businessType ?? "SaleNormal";
 
-  // 2. 取新单据模板（含 vchcode + number）
+  // 2. 取新单据模板（含 vchcode + number，SaleBack 退货单）
   const template = await api.call<Record<string, unknown>>(
     "recordsheet/goodsBill/getBillByVchcode",
-    { vchtype: "Sale", businessType, copyTypeEnum: "DEFAULT", sourceVchtype: "Sale", targetVchtype: "Sale" },
+    {
+      vchtype: "SaleBack",
+      businessType: "SaleNormal",
+      copyTypeEnum: "DEFAULT",
+      sourceVchtype: "SaleBack",
+      targetVchtype: "SaleBack",
+    },
   );
 
   // 3. 填充模板
   const bill = {
     ...template,
-    // 业务关键字段
     ktypeId: warehouse.id,
     kfullname: warehouse.name,
     btypeId: customer.id,
     bfullname: customer.name,
-    businessType,
-    outDetail: lines,
+    businessType: "SaleNormal",
+    inDetail: lines,
+    outDetail: [],
     currencyBillTotal: total,
     source: "手工新增",
     memo: input.memo ?? template.memo ?? "",
     summary: input.summary ?? template.summary ?? "",
-    // 日期覆盖
     ...(input.date ? { date: `${input.date}T00:00:00.000Z`, numberDate: `${input.date}T00:00:00.000Z` } : {}),
-    // 确认/校验控制
+    // 销售退货 CONFIRM 同销售：needValidation:false + failedSaveUnconfirmed + allowZeroQty
     needValidation: opts.force ? false : true,
     failedSaveUnconfirmed: !!opts.force,
     allowZeroQty: !!opts.force,
-    // 保存控制字段（模板不含，必须补 —— 否则服务端不处理明细）
     activeControl: "save",
     validaterOrder: 0,
     createStartTime: true,
     startObjSave: {
       startTime: Date.now(),
-      funcName: "单据->销售-销售出库单->保存单据(PROCESS_COMPLETED)",
-      batchCount: 1,
+      funcName: "单据->销售-销售退货单->保存单据(PROCESS_COMPLETED)",
+      batchCount: lines.length,
     },
-    // 保留模板分配的标识
     saveModel: "SAVE_NEW",
   };
 
   // 4. 提交
   const { json } = await api.callRaw("recordsheet/goodsBill/submitBill", bill);
   const data = json?.data ?? {};
-  const exceptions: { code: string; message: string }[] = (data.exceptionInfo ?? []).map((e: { bizErrorCode: string; message: string }) => ({
-    code: e.bizErrorCode,
-    message: e.message,
-  }));
+  const exceptions: { code: string; message: string }[] = (data.exceptionInfo ?? []).map(
+    (e: { bizErrorCode: string; message: string }) => ({ code: e.bizErrorCode, message: e.message }),
+  );
   const needsConfirm = data.resultType === "CONFIRM" || exceptions.length > 0;
 
   return {
