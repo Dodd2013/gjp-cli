@@ -423,3 +423,269 @@ function todayStr(d: Date): string {
 function todayIsoNow(): string {
   return new Date().toISOString();
 }
+
+// ===== 财务单据查询 / 详情 / 删除 =====
+// 查询：recordsheet/financeBillQuery/financebillquerylist（按日期/类型查收付款单）
+// 详情：recordsheet/financeBillQuery/getDetail（账户明细 accountList）
+// 删除：recordsheet/billCore/deleteBill {accountBill:true}（与采购同接口，但带 accountBill 标记；
+//       财务单据删除是干净的，无 NEG_STOCK_ERROR/CONFIRM 链——资金运动可由核算反冲）
+
+/** 财务单据类型筛选 */
+export type FinanceBillType = "payment" | "receipt" | "all";
+
+const FINANCE_VCHTYPES: Record<FinanceBillType, number[]> = {
+  payment: [4002],
+  receipt: [4001],
+  all: [4001, 4002, 4005, 4006, 4007, 4000],
+};
+
+/** 财务单据摘要 */
+export interface FinanceBillSummary {
+  vchcode: string;
+  billNumber: string;
+  /** 单据类型名（财务-付款单/财务-收款单） */
+  vchtypeName: string;
+  /** Payment / Receiving */
+  vchtypeEnum: string;
+  /** 业务类型枚举（PaymentNormal 等，删除时用作 businessType） */
+  businessTypeEnum: string;
+  /** 业务类型名（普通/预付…） */
+  businessTypeName: string;
+  /** 对方单位 */
+  bfullname: string;
+  /** 单据金额（付款为负、收款为正，保留符号） */
+  currencyBillTotal: number;
+  billDate: string;
+  memo: string;
+  summary: string;
+  /** 过账状态（800=已过账） */
+  postState: number;
+}
+
+interface RawFinanceBill {
+  vchcode: string;
+  billNumber: string;
+  vchtypeName: string;
+  vchtypeEnum: string;
+  businessTypeEnum: string;
+  businessTypeName: string;
+  bfullname: string;
+  btypeFullName: string;
+  currencyBillTotal: number;
+  billDate: string;
+  memo: string;
+  summary: string;
+  postState: number;
+}
+
+function summarizeFinanceBill(b: RawFinanceBill): FinanceBillSummary {
+  return {
+    vchcode: str(b.vchcode),
+    billNumber: str(b.billNumber),
+    vchtypeName: str(b.vchtypeName),
+    vchtypeEnum: str(b.vchtypeEnum),
+    businessTypeEnum: str(b.businessTypeEnum),
+    businessTypeName: str(b.businessTypeName),
+    bfullname: str(b.bfullname ?? b.btypeFullName),
+    currencyBillTotal: num(b.currencyBillTotal),
+    billDate: str(b.billDate),
+    memo: str(b.memo),
+    summary: str(b.summary),
+    postState: num(b.postState),
+  };
+}
+
+export interface ListFinanceBillsOpts {
+  /** payment / receipt / all，默认 all */
+  type?: FinanceBillType;
+  /** 起始日期 YYYY-MM-DD（默认今天-7） */
+  from?: string;
+  /** 结束日期 YYYY-MM-DD（默认今天） */
+  to?: string;
+  /** 对方单位名（解析成 btypeId 后客户端过滤） */
+  party?: string;
+  /** 精确单据号 FK-/SK- */
+  billNumber?: string;
+  /** 返回条数，默认 20 */
+  pageSize?: number;
+}
+
+/** 查财务收付款单列表（已过账 postState=800） */
+export async function listFinanceBills(opts: ListFinanceBillsOpts = {}): Promise<{ total: string; list: FinanceBillSummary[] }> {
+  const api = new JxcClient();
+  await api.init();
+  const now = new Date();
+  const from = opts.from ?? todayStr(new Date(now.getTime() - 7 * 86400000));
+  const to = opts.to ?? todayStr(now);
+
+  const data = await api.call<{ total: string; list: RawFinanceBill[] }>(
+    "recordsheet/financeBillQuery/financebillquerylist",
+    {
+      queryParams: {
+        postState: null,
+        postStateList: [800],
+        moneyType: 0,
+        balanceType: null,
+        businessTypeList: [0, 400, 410, 420, 421, 422, 423, 424, 425, 426, 427],
+        customTypeList: [10, 11, 12, 13, 0],
+        vchtypes: FINANCE_VCHTYPES[opts.type ?? "all"],
+        startTime: `${from}T00:00:00.000Z`,
+        endTime: `${to}T23:59:59.000Z`,
+        redbillState: -1,
+      },
+      pageSize: opts.pageSize ?? 20,
+      pageIndex: 1,
+      sorts: null,
+    },
+  );
+
+  let list = (data.list ?? []).map(summarizeFinanceBill);
+
+  // 客户端过滤（query 接口未暴露 btypeId/billNumber 过滤项）
+  if (opts.party) {
+    const party = await api.resolveBtype(opts.party);
+    // 查询结果 bfullname 可能与解析名有差异，宽松匹配：包含即可
+    const wanted = party.name;
+    list = list.filter((b) => b.bfullname === wanted || b.bfullname.includes(wanted) || wanted.includes(b.bfullname));
+  }
+  if (opts.billNumber) {
+    list = list.filter((b) => b.billNumber === opts.billNumber);
+  }
+
+  return { total: str(data.total), list };
+}
+
+/** 财务单据引用（删除用：需 vchcode/vchtype/businessType/billDate/postState） */
+export interface FinanceBillRef {
+  vchcode: string;
+  billNumber: string;
+  /** Payment / Receiving（删除时作 vchtype） */
+  vchtypeEnum: string;
+  /** PaymentNormal 等（删除时作 businessType） */
+  businessTypeEnum: string;
+  /** 完整 ISO 串（删除入参 billDate 原样透传） */
+  billDate: string;
+  billPostState: number;
+  bfullname: string;
+  currencyBillTotal: number;
+}
+
+/** 按单号(FK-/SK-)或 vchcode 查找已过账财务单据（取 billDate/postState/类型 供删除用） */
+export async function findFinanceBill(bill: string): Promise<FinanceBillRef> {
+  const api = new JxcClient();
+  await api.init();
+  const now = Date.now();
+  // 宽日期范围（近 3 年）确保能找到旧单据
+  const data = await api.call<{ list: RawFinanceBill[] }>(
+    "recordsheet/financeBillQuery/financebillquerylist",
+    {
+      queryParams: {
+        postState: null,
+        postStateList: [800],
+        moneyType: 0,
+        balanceType: null,
+        businessTypeList: [0, 400, 410, 420, 421, 422, 423, 424, 425, 426, 427],
+        customTypeList: [10, 11, 12, 13, 0],
+        vchtypes: FINANCE_VCHTYPES.all,
+        startTime: new Date(now - 3 * 365 * 86400000).toISOString(),
+        endTime: new Date(now + 365 * 86400000).toISOString(),
+        redbillState: -1,
+      },
+      pageSize: 500,
+      pageIndex: 1,
+      sorts: null,
+    },
+  );
+  const list = (data.list ?? []).map(summarizeFinanceBill);
+  const hit = list.find((b) => b.vchcode === bill || b.billNumber === bill);
+  if (!hit) {
+    throw new ApiError(`未找到已过账(postState=800)的财务单据"${bill}"`, "NOT_FOUND");
+  }
+  return {
+    vchcode: hit.vchcode,
+    billNumber: hit.billNumber,
+    vchtypeEnum: hit.vchtypeEnum,
+    businessTypeEnum: hit.businessTypeEnum,
+    billDate: hit.billDate,
+    billPostState: hit.postState,
+    bfullname: hit.bfullname,
+    currencyBillTotal: hit.currencyBillTotal,
+  };
+}
+
+/** 财务单据详情（账户明细） */
+export interface FinanceBillDetail {
+  vchcode: string;
+  vchtypeEnum: string;
+  billNumber: string;
+  /** 资金账户明细 */
+  accounts: {
+    atypeId: string;
+    atypeFullName: string;
+    atypeUserCode: string;
+    total: number;
+    btypeId: string;
+    btypeFullName: string;
+    memo: string;
+  }[];
+}
+
+/** 查财务单据详情（账户明细：哪个账户收/付了多少） */
+export async function getFinanceBillDetail(vchcode: string): Promise<FinanceBillDetail> {
+  const api = new JxcClient();
+  await api.init();
+  // 先查摘要拿 vchtypeEnum
+  const ref = await findFinanceBill(vchcode);
+  const data = await api.call<{ accountList: Record<string, unknown>[] }>(
+    "recordsheet/financeBillQuery/getDetail",
+    { vchcode, vchtype: ref.vchtypeEnum, queryPostState: ref.billPostState },
+  );
+  const accounts = (data.accountList ?? []).map((a) => ({
+    atypeId: str(a.atypeId),
+    atypeFullName: str(a.atypeFullName),
+    atypeUserCode: str(a.atypeUserCode),
+    total: num(a.total),
+    btypeId: str(a.btypeId),
+    btypeFullName: str(a.btypeFullName),
+    memo: str(a.memo),
+  }));
+  return {
+    vchcode: ref.vchcode,
+    vchtypeEnum: ref.vchtypeEnum,
+    billNumber: ref.billNumber,
+    accounts,
+  };
+}
+
+export interface DeleteFinanceBillResult {
+  success: boolean;
+  deleted: boolean;
+  billNumber: string;
+  vchcode: string;
+  message?: string;
+  raw?: unknown;
+}
+
+/** 删除财务收付款单（accountBill:true，单次调用；资金运动由核算反冲，无负库存链） */
+export async function deleteFinanceBill(ref: FinanceBillRef): Promise<DeleteFinanceBillResult> {
+  const api = new JxcClient();
+  await api.init();
+  const { json } = await api.callRaw("recordsheet/billCore/deleteBill", {
+    vchcode: ref.vchcode,
+    vchtype: ref.vchtypeEnum,
+    businessType: ref.businessTypeEnum,
+    accountBill: true,
+    billDate: ref.billDate,
+    billPostState: ref.billPostState,
+  });
+  const data = json?.data ?? {};
+  const ok = json.code === "200" && data.success === true;
+  return {
+    success: ok,
+    deleted: ok,
+    billNumber: ref.billNumber,
+    vchcode: ref.vchcode,
+    message: ok ? "删除成功" : str(json?.message ?? data?.msg ?? "删除失败"),
+    raw: data,
+  };
+}

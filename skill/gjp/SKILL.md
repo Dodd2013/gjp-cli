@@ -218,6 +218,30 @@ gjp finance receipt -c <客户名> --amount <金额> [-a 现金] [--memo 货款]
 
 > 💡 收付款默认**不核销具体单据**（直接冲减往来单位的应收/应付余额）。资金账户可用 `gjp finance payment -s X --amount 1 --dry-run` 查看。金额必须 >0。
 
+### 查收付款单列表
+```bash
+gjp finance list [-t payment|receipt|all] [--from --to] [--party 对方名] [--bill 单号] [-n 条数]
+```
+默认近 7 天、全部类型。`--party`/`--bill` 为客户端过滤。
+**输出**：`{total, list:[{vchcode, billNumber, vchtypeName, vchtypeEnum(Payment/Receiving), businessTypeEnum, businessTypeName, bfullname, currencyBillTotal(付款为负/收款为正), billDate, memo, summary, postState}]}`。
+
+### 查收付款单详情（账户明细）
+```bash
+gjp finance get --id <vchcode 或 FK-/SK- 单号>
+```
+**输出**：`{vchcode, vchtypeEnum, billNumber, accounts:[{atypeFullName, total, btypeFullName, memo}]}`（哪个账户收/付了多少、给/收自谁）。
+
+### 删除收付款单
+```bash
+gjp finance delete --bill <FK-/SK- 单号 或 vchcode> [--yes]
+```
+- **二次确认**：默认列出单据（单号/对方/金额/日期）并提示 `确认删除? (y/N)`；非交互环境须加 `--yes`。
+- 财务单据删除是**单次干净调用**（资金运动由核算反冲，无负库存链）。删除警告走 stderr，stdout 为纯 JSON。
+- **输出**：`{success, deleted, billNumber, vchcode, message}`。
+- 例：`gjp finance delete --bill FK-20260621-00001 --yes`
+
+> ⚠️ 删除不可逆（但会反冲该笔收付款对往来余额/资金账户的影响）。仅能删已过账（postState=800）单据。
+
 ## 采购（purchase）
 
 ### 开采购入库单

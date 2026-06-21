@@ -1,6 +1,6 @@
 {
   "name": "gjpcli",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "管家婆进销存 CLI — 纯 HTTP，AI 友好（第三方非官方）",
   "type": "module",
   "license": "MIT",

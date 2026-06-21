@@ -1,10 +1,10 @@
-# CLAUDE.md — 管家婆进销存 CLI 项目
+# AGENTS.md — 管家婆进销存 CLI 项目
 
 > 本文件是本项目的持久化工作指南。新会话开始时优先阅读此文件。
 
 ## 项目目标
 
-把网上管家婆云进销存（`ngpkj.wsgjp.com.cn`）接入 Claude Code：构建一个 TS+Bun 的 CLI，能登录鉴权并执行进销存业务操作（采购/销售/库存/报表等），最终供 AI 调用。
+把网上管家婆云进销存（`ngpkj.wsgjp.com.cn`）接入 Codex：构建一个 TS+Bun 的 CLI，能登录鉴权并执行进销存业务操作（采购/销售/库存/报表等），最终供 AI 调用。
 
 ## 技术栈
 
@@ -40,7 +40,7 @@ gjp-cli/
 │   ├── API.md         ← 所有业务接口文档（HAR 提炼，持续扩充）
 │   └── implementation-plan.html  方案网页
 ├── bin/gjp.js         ← 全局命令入口
-└── CLAUDE.md          本文件
+└── AGENTS.md          本文件
 ```
 
 ## 工作方法论（核心）
@@ -114,13 +114,13 @@ export async function doSomething() {
 
 ### 步骤 3：CLI 命令 → Skill
 
-本项目是**开源项目，Skill 作为 CLI 的配套产物**一起分发：用户装上 CLI 后，把项目内的 Skill 软链到自己的 `~/.claude/skills/`，任意会话的 Claude 即可调用 `gjp`。
+本项目是**开源项目，Skill 作为 CLI 的配套产物**一起分发：用户装上 CLI 后，把项目内的 Skill 软链到自己的 `~/.Codex/skills/`，任意会话的 Codex 即可调用 `gjp`。
 
 **Skill 位置**：项目内 `skill/gjp/SKILL.md`（随 git 版本化，对用户可见）。
 
 **用户安装 Skill**（写进 README）：
 ```bash
-ln -sf "$(pwd)/skill/gjp" ~/.claude/skills/gjp
+ln -sf "$(pwd)/skill/gjp" ~/.Codex/skills/gjp
 ```
 
 **Skill 内容要点**：
@@ -206,16 +206,13 @@ cd docs && python3 -m http.server 8848      # http://localhost:8848/implementati
   - 库存状况 `analysiscloud/inventorySituation/list`（按商品汇总：现存量/可销量/可发量/成本/售价总额），明细分布 `analysiscloud/inventoryBatch/listInventoryPosition`（按商品×库位拆分）
   - 🔑 库存查询用 **`ktypeIdss`（双 s，仓库 ID 数组）** 过滤仓库（不是 ktypeId）；`inventoryType:"qualityInventory"`；`data.total` 常返回 `"-1"`（bigData 未汇总），以 list.length 为准
   - 仓库列表复用 `ktype/pagelist`（`stock warehouses`）
-- ✅ **业务命令 `finance arrears/reconciliation/payment/receipt/list/get/delete`**（来自 `往来单位应收应付.har`+`付款单新增&修改.har`+`收款单.har`+`财务单据查询&删除.har`）—— **全部线上实测通过**（含建→删闭环：建 SK-...00004/FK-...00003 后删除，净影响为零）
+- ✅ **业务命令 `finance arrears/reconciliation/payment/receipt`**（来自 `往来单位应收应付.har`+`付款单新增&修改.har`+`收款单.har`）
   - 应收应付汇总 `analysiscloud/btypeAnalyse/listBtypeAnalyse`：`bcategory` 0=客户(应收)/1=供应商(应付)/null=全部，`btypeZeroFilter` 控制零余额；返回 arTotal/apTotal/prTotal(预收)/ppTotal(预付)
   - 对账明细 `analysiscloud/accountReconciliation/listNewAccountReconciliation`：入参 `btypeId`+`vchTypes`(覆盖采购/销售/财务)+`reconciliationStartDate/EndDate`(UTC ISO)+`type:1`；返回 billTotal/billPaymentTotal(已核销)/billPaymentRemainTotal(未核销)
   - 🔑 **收付款单走 `recordsheet/finance/submitBill/`（注意是 `finance/` 不是 `goodsBill/`）**：付款 `Payment`(intVchtype 4002, FK-, btype=供应商, balanceReverse:true) / 收款 `Receiving`(intVchtype 4001, SK-, btype=客户, balanceReverse:false)，businessType 都是 `PaymentNormal`
   - 🔑 **`finance/getBill {vchtype,businessType:"PaymentNormal",customType:0}` 独立分配新 vchcode+number+date**（实测 FK-...00002/SK-...00003 紧接上次序号），无需先调 `billNumber/updateBillNumber`（与货物单据 getBillByVchcode 同构）
   - 金额经 `accountDetail`（资金账户 atypeId+total）登记，`balanceBillDetail:[]` 不核销具体单据（直接冲减往来余额）；资金账户由 `baseinfo/atype/pagelist {parTypeId:"00001"}` 解析（新增 `client.ts: resolveAccount`，默认"现金"）
-  - 收付款单查询 `financeBillQuery/financebillquerylist`：`vchtypes` 4002=付款/4001=收款/全量=[4001,4002,4005,4006,4007,4000]，`postStateList:[800]`；返回 `currencyBillTotal`（**付款负/收款正**）；`businessTypeEnum`(PaymentNormal) 删除时作 businessType。详情 `financeBillQuery/getDetail {vchcode,vchtype,queryPostState}` 返回 `accountList`（账户明细）
-  - 🔑 **删除走 `billCore/deleteBill`（与采购同接口）但带 `accountBill:true` 标记**，且 `vchtype`/`businessType` 用枚举字符串（Payment/PaymentNormal）；财务删除是**单次干净调用**（资金运动由核算反冲，**无 NEG_STOCK_ERROR/CONFIRM 链**，与采购删除的两阶段 force 不同）；`billDate` 用完整 ISO 原样透传
-  - `finance delete` 二次确认（readConfirm），警告走 stderr 保 stdout 纯 JSON；`findFinanceBill` 用宽日期范围(近3年)按单号/vchcode 定位
-  - 闭环实测：建 SK-...00004(二货无敌 1元现金)→列表/详情确认→删除成功(`{success:true,result:null,errorDetail:null}` 与 HAR 逐字一致)→列表确认消失；FK-...00003(供应商1111) 同样闭环
+  - 业务员/制单人取当前员工（etype/getform）；写命令 dry-run 解析的 ID 与 HAR **完全一致**（供应商 1904594932357963155 / 客户 1905059536147674207 / 现金 1265029598616543238），getBill 分配验证通过；**未做真实建单实测**（产生真实财务记录，CLI 暂无收付款单删除命令，需用户授权后再测）
 - ✅ **业务命令 `report income`**（来自 `本月利润.har`）—— **只读命令线上实测通过**（revenue 113.8 / expense 46.58 / profit 67.22，与 HAR 吻合）
   - 利润表 `accounting/incomeReport/getCurrentIncomeReportDynamicShow`：入参 `period:"YYYYMM"`+`atypeLevel:2`+`atypeFilter:1`；返回按科目层级铺平的 list
   - 🔑 收入合计=`typeid:"00003"` 的 monthPeriodTotal，支出合计=`typeid:"00004"`，利润=`typeid:null && fullname:"利润"`；`--summary-only` 只输出 {period,revenue,expense,profit,yearProfit}

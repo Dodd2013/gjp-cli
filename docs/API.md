@@ -421,6 +421,7 @@ gjp sales create \
 | ~~采购入库~~ | ~~新建采购单~~ | ✅ 已实现（见 §9，vchtype=Buy） |
 | ~~库存查询~~ | ~~库存状况/明细分布~~ | ✅ 已实现（见 §11，`analysiscloud/inventorySituation|inventoryBatch`） |
 | ~~财务收付款~~ | ~~收款单/付款单~~ | ✅ 已实现（见 §12，`finance/getBill`+`finance/submitBill`） |
+| ~~财务单据查删~~ | ~~收付款单查询/详情/删除~~ | ✅ 已实现（见 §12.4~12.6，`financeBillQuery`+`billCore/deleteBill accountBill:true`） |
 | ~~往来应收应付~~ | ~~应收应付汇总/对账~~ | ✅ 已实现（见 §12，`analysiscloud/btypeAnalyse|accountReconciliation`） |
 | ~~利润报表~~ | ~~利润表~~ | ✅ 已实现（见 §13，`accounting/incomeReport`） |
 | ~~销售退货~~ | ~~销售退货单~~ | ✅ 已实现（见 §14，vchtype=SaleBack） |
@@ -457,7 +458,9 @@ recordsheet/       accBusinessType/list, basePtypeUnit/findFirstPtypeFullbarcode
                    postBill/listPostBill,
                    ptype/baselist·ptypelist·getBatchPtypeSku·getBatchPtypeTierPrice·
                          getBindPtypePositionList·getPtypePrice·getPtypePriceAndCost·getStockQty,
-                   finance/getBill·submitBill·modifyCheck, billCore/deleteBill,
+                   finance/getBill·submitBill·modifyCheck,
+                   financeBillQuery/financebillquerylist·getDetail,
+                   billCore/deleteBill, postBill/listPostBill,
                    sys/afterLogin
 
 analysiscloud/     inventorySituation/list·count·pageCount,
@@ -1053,6 +1056,73 @@ CLI：`gjp finance reconciliation --party <对方单位名> [--from --to] [-n �
 > 资金账户（`atype`，如 现金/银行存款）由 `baseinfo/atype/pagelist {parTypeId:"00001"}` 解析（返回 `id`/`fullname`/`usercode`）。
 
 CLI：`gjp finance payment -s <供应商> --amount <金额> [-a 现金] [--memo 货款] [--date]`；`gjp finance receipt -c <客户> --amount <金额> ...`。两者都支持 `--dry-run`。
+
+### 12.4 收付款单查询 `POST /jxc/recordsheet/financeBillQuery/financebillquerylist` ★★
+
+按日期/类型查已过账（postState=800）的收付款单。
+
+```jsonc
+{
+  "queryParams": {
+    "postState": null, "postStateList": [800],     // 仅已过账
+    "moneyType": 0, "balanceType": null,
+    "businessTypeList": [0,400,410,420,421,422,423,424,425,426,427],
+    "customTypeList": [10,11,12,13,0],
+    "vchtypes": [4002],                             // 4002=付款 4001=收款；全量=[4001,4002,4005,4006,4007,4000]
+    "startTime": "2026-06-14T16:00:00.000Z",        // UTC ISO
+    "endTime":   "2026-06-21T15:59:59.000Z",
+    "redbillState": -1
+  },
+  "pageSize": 10, "pageIndex": 1, "sorts": null
+}
+```
+
+响应 `data.list[]` 关键字段：`vchcode`/`billNumber`(FK-/SK-)、`vchtypeName`(财务-付款单/收款单)、`vchtypeEnum`(Payment/Receiving)、`vchtype`(4002/4001)、`businessTypeEnum`(PaymentNormal，删除时用作 businessType)、`businessTypeName`(普通)、`bfullname`(对方)、`currencyBillTotal`(**付款为负、收款为正**，保留符号)、`billDate`、`memo`/`summary`、`postState`。`data.total` 为总数。
+
+> 查询接口未暴露 `btypeId`/`billNumber` 过滤项，CLI 对 `--party`/`--bill` 做**客户端过滤**（先取列表再筛）。
+
+CLI：`gjp finance list [-t payment|receipt|all] [--from --to] [--party 对方] [--bill 单号] [-n 条数]`。
+
+### 12.5 收付款单详情 `POST /jxc/recordsheet/financeBillQuery/getDetail` ★
+
+```jsonc
+{ "vchcode": "1905...", "vchtype": "Payment", "queryPostState": 800 }
+```
+
+响应 `data.accountList[]`（资金账户明细）：`atypeId`/`atypeFullName`(现金)/`atypeUserCode`/`total`(金额)/`btypeId`/`btypeFullName`(对方)/`memo`。即「这笔收付款从哪个账户进出、给/收自哪个往来单位」。
+
+CLI：`gjp finance get --id <vchcode 或 FK-/SK- 单号>`。
+
+### 12.6 删除收付款单 `POST /jxc/recordsheet/billCore/deleteBill` ★★★
+
+与采购单删除（§9.4）**同一接口**，差异：
+
+| 项 | 采购单删除 | 财务单据删除 |
+|----|-----------|------------|
+| `accountBill` | 不传 | **`true`**（标记为财务单据） |
+| `vchtype` / `businessType` | `"Buy"` / `"Buy"` | `"Payment"`/`"Receiving"` / `"PaymentNormal"`（枚举字符串） |
+| CONFIRM 链 | 删后负库存 → `NEG_STOCK_ERROR` → `confirm:true` 重提 | **无**（资金运动由核算反冲，单次调用即成功） |
+
+```jsonc
+{
+  "vchcode": "1905...", "vchtype": "Payment", "businessType": "PaymentNormal",
+  "accountBill": true,
+  "billDate": "2026-06-21T01:56:33.000+00:00",   // 完整 ISO（来自查询，原样透传）
+  "billPostState": 800
+}
+```
+
+响应：`{success:true, result:null, errorDetail:null}`（干净成功，无异常链）。
+> `billDate`/`billPostState`/`vchtype`/`businessType` 都来自 §12.4 的查询结果，CLI `finance delete --bill <单号>` 内部先查再删。
+
+CLI：`gjp finance delete --bill <FK-/SK- 单号 或 vchcode> [--yes]`。**二次确认**：默认打印单据信息并提示 `确认删除? (y/N)`，非交互环境须 `--yes`。删除警告走 stderr，stdout 保持纯 JSON。
+
+### 12.7 业务流程示例：删除一张付款单
+
+```
+1. financeBillQuery/financebillquerylist {vchtypes:[4001,4002,...]}  → 按单号定位，取 vchcode/billDate/postState/vchtypeEnum/businessTypeEnum
+2. billCore/deleteBill {accountBill:true, vchtype, businessType, billDate, billPostState}  → 删除
+```
 
 ---
 
