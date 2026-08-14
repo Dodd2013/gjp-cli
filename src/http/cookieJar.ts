@@ -8,6 +8,40 @@ import { CookieJar, type SerializedCookieJar } from "tough-cookie";
 const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36";
 
+/**
+ * 旧版写死的业务 API 域名。部分账套实际部署在独立集群（如 ngpd5kj.wsgjp.com.cn），
+ * 登录时会将真实域名写入 ~/.gjp/api-base，这里做透明替换。
+ */
+const LEGACY_NGPKJ = "https://ngpkj.wsgjp.com.cn";
+let cachedApiBase: string | null = null;
+let apiBaseLoaded = false;
+
+function loadApiBase(): string | null {
+  if (!apiBaseLoaded) {
+    apiBaseLoaded = true;
+    if (process.env.GJP_API_BASE) {
+      cachedApiBase = process.env.GJP_API_BASE;
+      return cachedApiBase;
+    }
+    try {
+      const { readFileSync } = require("node:fs");
+      const { homedir } = require("node:os");
+      const { join } = require("node:path");
+      const t = readFileSync(join(homedir(), ".gjp", "api-base"), "utf-8").trim();
+      if (t) cachedApiBase = t;
+    } catch { /* ignore */ }
+  }
+  return cachedApiBase;
+}
+
+function resolveUrl(url: string): string {
+  if (typeof url === "string" && url.startsWith(LEGACY_NGPKJ)) {
+    const base = loadApiBase();
+    if (base) return base + url.slice(LEGACY_NGPKJ.length);
+  }
+  return url;
+}
+
 export class HttpClient {
   readonly jar: CookieJar;
   readonly defaultOrigin: string;
@@ -47,7 +81,7 @@ export class HttpClient {
   }
 
   async request(
-    url: string,
+    rawUrl: string,
     opts: {
       method?: "GET" | "POST";
       body?: unknown;
@@ -55,6 +89,7 @@ export class HttpClient {
       origin?: string;
     } = {},
   ): Promise<Response> {
+    const url = resolveUrl(rawUrl);
     const { method = "GET", body, headers = {}, origin } = opts;
     const cookie = await this.cookieHeader(url);
 
