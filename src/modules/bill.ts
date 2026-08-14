@@ -174,3 +174,103 @@ interface RawBizType {
   businessTypeEnum: string;
   stoppedInVchtype: boolean;
 }
+
+// ---------------------------------------------------------------------------
+// 已过账单据明细（goodsBill/getBillByVchcode 直接取已存在单据）
+// 见 docs/API.md §17。配合 listBills 的 vchcode 取商品行。
+// ---------------------------------------------------------------------------
+
+/** 单据族 → (vchtype 枚举串, businessType) */
+export const GOODS_VCHTYPE_MAP: Record<string, { vchtype: string; businessType: string; group: BillTypeGroup }> = {
+  Sale: { vchtype: "Sale", businessType: "SaleNormal", group: "sale" },
+  SaleBack: { vchtype: "SaleBack", businessType: "SaleNormal", group: "sale" },
+  Buy: { vchtype: "Buy", businessType: "Buy", group: "purchase" },
+  BuyBack: { vchtype: "BuyBack", businessType: "Buy", group: "purchase" },
+};
+
+/** 单号前缀 → 单据族（用于自动推断） */
+export const BILL_PREFIX_MAP: Record<string, keyof typeof GOODS_VCHTYPE_MAP> = {
+  PXX: "Sale",
+  PXT: "SaleBack",
+  "CR-": "Buy",
+  CGD: "Buy",
+  "CT-": "BuyBack",
+};
+
+export interface PostedBillLine {
+  name: string;
+  standard: string;
+  qty: number;
+  unit: string;
+  price: number;
+  total: number;
+}
+
+export interface PostedBillDetail {
+  billNumber: string;
+  vchcode: string;
+  vchtype: string;
+  party: string;
+  warehouse: string | null;
+  total: number;
+  postState: number | null;
+  billDate: string;
+  summary: string;
+  memo: string;
+  lines: PostedBillLine[];
+}
+
+/** 取已过账单据的完整明细（商品行）。vchcode 可先经 listBills 获得。 */
+export async function getPostedBillDetail(
+  vchcode: string,
+  opts: { vchtype?: string; businessType?: string } = {},
+): Promise<PostedBillDetail> {
+  const api = new JxcClient();
+  await api.init();
+
+  const family = opts.vchtype ?? "Sale";
+  const conf = GOODS_VCHTYPE_MAP[family] ?? GOODS_VCHTYPE_MAP.Sale;
+
+  const data = await api.call<{
+    number?: string;
+    vchcode?: string;
+    vchtype?: string;
+    bfullname?: string;
+    kfullname?: string | null;
+    currencyBillTotal: number;
+    postState?: number | null;
+    date?: string;
+    summary?: string;
+    memo?: string;
+    outDetail?: any[];
+    inDetail?: any[];
+  }>("recordsheet/goodsBill/getBillByVchcode", {
+    vchcode,
+    vchtype: conf.vchtype,
+    businessType: opts.businessType ?? conf.businessType,
+    copyTypeEnum: "DEFAULT",
+  });
+
+  const lines = data.outDetail ?? data.inDetail ?? [];
+
+  return {
+    billNumber: data.number ?? "",
+    vchcode: String(data.vchcode ?? vchcode),
+    vchtype: data.vchtype ?? conf.vchtype,
+    party: data.bfullname ?? "",
+    warehouse: data.kfullname ?? null,
+    total: Number(data.currencyBillTotal ?? 0),
+    postState: data.postState ?? null,
+    billDate: data.date ?? "",
+    summary: data.summary ?? "",
+    memo: data.memo ?? "",
+    lines: lines.map((l: any) => ({
+      name: l.pFullName ?? "",
+      standard: l.standard ?? "",
+      qty: Number(l.qty ?? 0),
+      unit: l.unitName ?? "",
+      price: Number(l.currencyPrice ?? 0),
+      total: Number(l.currencyTotal ?? 0),
+    })),
+  };
+}

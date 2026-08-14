@@ -1135,3 +1135,136 @@ CLI：`gjp report income [-p 202606] [--summary-only]`（`--summary-only` 只输
 ```
 
 CLI：`gjp sales return -c <客户> --items '<JSON>' [-w 仓库] [--memo] [--date] [--force] [--dry-run]`。
+
+---
+
+## 15. 订单模块 `recordsheet/orderBillCore` + `recordsheet/orderBill`
+
+> 2026-08-14 从网页前端静态资源逆向 + 实测验证（来源：`/jxc/recordsheet/stock/SupplyMarketingBillNew.js`、`/jxc/recordsheet/selector/OrderBillSelector.js`）。
+> 订单（销售订单/采购订单/报价单/询价单）是独立于出入库单据的单据族，**不在** `postBill/listPostBill` 和 `goodsBill/*` 里。
+
+### 15.1 订单 vchtype 码（orderBillCore/list 的 `vchtypes` 过滤值）
+
+| vchtype | 枚举名 | 含义 |
+|---------|--------|------|
+| 9000 | BuyOrder | 采购订单 |
+| 9001 | SaleOrder | 销售订单 |
+| 9003 | Quotation | 报价单 |
+| 9004 | InQuiry | 询价单 |
+| 9005 | GoodsTrans | 调拨单 |
+| 9006 | ProductionPlan | 生产计划单 |
+| 9007 | ProductionTaskOrder | 生产任务单 |
+
+**auditState（订单审核状态）**：`1` 待提交 · `2` 待审核 · `3` 审核中 · `4` 已驳回 · `5` 已审核 · `6` 已完成。
+**overState（完成状态）**：`0` 未完成 · `1` 已完成 · `2` ? · `3` 部分完成（前端选单器默认查 `[0,3]`）。
+
+### 15.2 订单列表 `recordsheet/orderBillCore/list`
+
+```jsonc
+// POST https://<apiBase>/jxc/recordsheet/orderBillCore/list
+{
+  "pageIndex": 1,
+  "pageSize": 20,
+  "queryParams": {
+    "vchtypes": [9001],              // 见 15.1
+    "auditStateList": [5],           // 不能为空（前端校验"订单状态不能为空!"）
+    "overStateList": [0, 3],
+    "startTime": "2026-08-10 00:00:00",
+    "endTime": "2026-08-10 23:59:59",
+    "businessTypeList": [201],       // 201=普通销售（同 goodsBill businessType 字典）
+    "dateType": 0,                   // 0=按单据时间 1=按交货时间（改用 toDateStart/toDateEnd）
+    "btypeId": "",                   // 可选：客户过滤
+    "queryOnlyUnFinishDetail": false,
+    "gridFilter": []                 // 可选：列过滤（{dataField, value}）
+    // 可选：etypeId 经手人 / ktypeId 仓库 / ptypeId 商品 / number 单号模糊
+  }
+}
+```
+
+**响应** `data.list[]` 关键字段：`billNumber`（前缀 `PXXD-`）· `vchcode` · `vchtype` · `vchtypeName`（"销售订单"）· `billBusinessTypeName` · `btypeId` · `bfullname`（客户）· `currencyBillTotal` · `auditState` · `overState` · `billDate` · `todate`（交货日期）· `summary` · `memo`。
+
+> 实测：日期字符串带不带时区均可（`2026-08-10T00:00:00+08:00` 与 `2026-08-10 00:00:00` 等价）。单号前缀注意：销售订单与销售出库单共用 `PXXD-` 前缀（出库单 summary 里"由销售订单：PXXD-xxx 生成"可区分）。
+
+### 15.3 订单详情（含商品行）`recordsheet/orderBill/getBill`
+
+```jsonc
+// POST
+{ "vchcode": "<订单vchcode>", "vchtype": "SaleOrder", "show": true, "queryOnlyUnFinishDetail": false }
+```
+
+**响应** `data`：单头（`billNumber`/`bfullname`/`kfullname`/`currencyBillTotal`/`todate`…）+ `data.detail[]` 商品行。
+行关键字段：`pFullName`（品名）· `standard`（规格）· `qty` · `unitName` · `currencyPrice` · `currencyTotal`。
+
+> 实测验证：PXXD-20260810-00124（陈林美，6 元）→ detail[0] = 120冰白珠光葵心 787*1092，5 张 × 1.2。
+
+### 15.4 订单转出库单（生单）流程
+
+```jsonc
+// ① 整单预检（实测可用）
+POST recordsheet/orderBill/checkBill
+{ "createType": 4, "vchcodeList": ["<订单vchcode>"], "createVchtype": "Sale", "fromVchtype": "SaleOrder" }
+// → code 200 且 data 为 null / 无异常时可通过
+
+// ② 按明细挑行生成（前端 OrderBillSelector 走这条）
+POST recordsheet/orderBill/checkBillByDetail
+{ ...订单行数据, "detailIdList": ["<明细ID列表>"], "newDetailList": [...], "createVchtype": "Sale" }
+
+// ③ 真正生成
+POST recordsheet/orderBill/selectDetailCreateBill
+{ ...同②, "createVchtype": "Sale" }
+// → data.createCount / 生成的单据 vchcode
+```
+
+### 15.5 其他订单接口（前端确认存在，未逐一实测）
+
+| 接口 | 用途 |
+|------|------|
+| `orderBill/submitBill` | 保存/修改订单（结构类似 goodsBill/submitBill，单头+detail） |
+| `orderBill/delete` + `orderBill/checkDelete` | 删除订单 / 删除预检 |
+| `orderBill/isBillExist` | 订单是否存在（注意：在 apiBase 域名下 404，可能挂在 ngpkj 主站） |
+| `orderBill/listOrderBillDetail` | 按明细跨订单查询（参数同 15.2 + gridFilter） |
+| `orderBillCore/listDetailIds` | 取订单明细 ID 集合 |
+| `orderBill/showdownOrder` / `checkshowDownBill` | 订单下推/查询下推结果 |
+| `orderBill/getOrderOccupyAdvanceTotal` | 订单占用订金 |
+
+## 16. 单据状态与审核 `recordsheet/billStatus` + `billAudit`
+
+> 同日实测。**vchtype 传字符串枚举**（"Sale"），不是数字。
+
+### 16.1 单据状态检查 `recordsheet/billStatus/billStatus`
+
+```jsonc
+// POST
+{ "vchcode": "<单据vchcode>", "checkType": "ALL", "vchtype": "Sale", "updateTime": "<单据updateTime>" }
+// → { "code": "200", "data": { "billChangeStatus": "NONE" | "DELETED" | ... } }
+```
+
+用途：编辑/删除前的乐观锁检查——单据被他人改动/删除时 `billChangeStatus != "NONE"`。
+注意：`vchcode` 传数字型字符串；`vchtype` 必须是 `"Sale"` 这类枚举字符串，传数字 2000 返回空体。
+
+### 16.2 审核相关（前端确认存在）
+
+| 接口 | 用途 |
+|------|------|
+| `billAudit/checkAuditEnable` | 检查单据是否可审核 |
+| `billAudit/antiAuditBill` | 反审核（撤回已审核单据） |
+
+## 17. 已过账单据商品明细 `recordsheet/goodsBill/getBillByVchcode`（EXISTED 模式补充）
+
+原有文档已记录 `copyTypeEnum:"DEFAULT"`（模板模式）。补充：**直接取已存在单据的完整明细**也走同一接口，参数相同：
+
+```jsonc
+{ "vchcode": "<已过账单据vchcode>", "vchtype": "Sale", "businessType": "SaleNormal", "copyTypeEnum": "DEFAULT" }
+```
+
+- `outDetail[]`（出库方向）/ `inDetail[]`（入库方向）商品行：`pFullName` · `standard` · `qty` · `unitName` · `currencyPrice` · `currencyTotal` · `costPrice`（成本）等 196 字段。
+- 单头另有 `postState`（800=已过账）· `bfullname` · `kfullname` · `summary`。
+- 配合 `postBill/listPostBill` 先拿 vchcode，再调本接口取商品行——即 `gjp bill detail` 的两步实现。
+
+## 18. 前端静态资源逆向方法（备忘）
+
+1. 前端入口 `<apiBase>/main.html` → `<script src="shell/js/init.js">`（菜单/权限键）
+2. 页面文件 `.gspx` 是 XML 描述，`ActionType="xxx, 路径.js"` 指向业务 JS
+3. 业务 JS（如 `SupplyMarketingBillNew.js` 1.7MB）内明文含所有 `jxc/recordsheet/...` 接口地址、参数结构、枚举值
+4. `res.js` 内 `window.$enum` 含全局枚举（BillTypes：10采购 20销售 30库存 40财务 **90准备单据(订单族)** 100报价 101询价 102其他）
+5. 静态资源网关路径：`/menus/*.js` 会 500，但 `/jxc/**.gspx` `/jxc/**.js` `/shell/**` 均可直接 GET

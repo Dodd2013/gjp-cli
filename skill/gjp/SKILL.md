@@ -26,6 +26,8 @@ gjp auth login -c <公司名或手机号> -u <用户名>
 
 会话过期时只要有保存的凭据，命令会**自动重登**，通常无需手动干预。
 
+**多账套账号**：若账号拥有多个产品账套（produtId），登录时会自动列出并选择；可用 `GJP_PRODUCT_ID` 环境变量或 `~/.gjp/product-id` 文件固定账套（存数字 ID，如 `88`），否则默认选第一个并在 stderr 提示。账套实际 API 域名登录后自动写入 `~/.gjp/api-base`（部分账套不在 ngpkj 主站，如 ngpd5kj.wsgjp.com.cn），业务请求自动走该域名。
+
 ## 通用约定
 
 - 所有业务命令**默认输出 JSON**，便于解析。失败时 `success: false` 且退出码非 0。
@@ -314,6 +316,43 @@ gjp bill list --bill CR-20260620-00001   # 精确查一张（返回 vchcode，�
 gjp bill types [--all]    # 默认排除已停用；--all 含全部
 ```
 **输出**：`[{vchtype, name, businessType, businessCode, businessTypeEnum, stoppedInVchtype}]`。用于查「某个 businessType 对应什么单据」「某类单据的 vchtype 码」。
+
+## 订单（order）
+
+销售/采购/报价/询价订单查询（订单是独立单据族，不在单据中心的 bill list 里；单号与出库单共用 `PXXD-` 前缀，以 summary「由销售订单生成」区分）。
+
+### 查订单列表
+```bash
+gjp order list \
+  [--from YYYY-MM-DD] [--to YYYY-MM-DD] \   # 默认近 7 天
+  [-c sale|buy|quotation|inquiry|transfer] \ # 默认 sale（销售订单）
+  [--state <状态码>] \                       # 逗号分隔，默认 5=已审核
+  [-n <条数>]                                 # 默认 20
+```
+例：`gjp order list --from 2026-08-10 --to 2026-08-10`（当天已审核销售订单）
+**输出**：`{total, list:[{billNumber, vchcode, vchtype, vchtypeName, businessTypeName, party, total, auditState, auditStateName, overState, billDate, todate(交货日), summary, memo}]}`。
+
+审核状态码：`1`待提交 `2`待审核 `3`审核中 `4`已驳回 `5`已审核 `6`已完成。查全部状态：`--state 1,2,3,4,5,6`。
+
+### 查订单明细（商品行）
+```bash
+gjp order detail -b <订单号|vchcode> [-c sale|buy|...] [--from ...] [--to ...]
+```
+例：`gjp order detail -b PXXD-20260810-00124`
+**输出**：`{billNumber, vchcode, party, warehouse, total, auditState, todate, summary, memo, lines:[{name, standard, qty, unit, price, total}]}`。
+> 单号解析默认在近 7 天已审核订单中找；老单/未审核单加 `--from/--to` 或 `--state` 前先 `order list`。
+
+## 单据明细（bill detail）
+
+`bill list` 只返回单据汇总；`bill detail` 取**已过账单据的商品行**：
+
+```bash
+gjp bill detail -b <单据号|vchcode> [--vchtype Sale|SaleBack|Buy|BuyBack] [--from ...] [--to ...]
+```
+- 单据族默认按单号前缀推断（`PXX-`→销售出库 `PXT-`→销售退货 `CR-/CGD`→采购入库 `CT-`→采购退货）。
+- 例：`gjp bill detail -b PXXD-20260809-00114`
+**输出**：`{billNumber, vchcode, vchtype, party, warehouse, total, postState, billDate, summary, memo, lines:[{name, standard, qty, unit, price, total}]}`。
+- 典型用法：`bill list` 拿单号 → `bill detail` 看卖了什么。
 
 ## 报表（report）
 
