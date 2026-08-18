@@ -188,4 +188,21 @@ export class JxcClient {
     if (!sku?.id) throw new ApiError(`商品 ${ptypeId} 无 SKU 信息`, "NOT_FOUND");
     return { skuId: sku.id, unitId: unit.id };
   }
+
+  /** 费用科目名（运费/佣金…，parTypeId=0000400003 费用项目）→ {id, fullname, usercode} */
+  async resolveFeeSubject(name: string): Promise<{ id: string; fullname: string; usercode: string }> {
+    const data = await this.call<{ list: { id: string; fullname: string; usercode: string }[] }>(
+      "baseinfo/atype/pagelist",
+      {
+        refresh: true,
+        queryParams: { filterKey: "quick", filterValue: name, parTypeId: "0000400003", stoped: 0, showClass: false },
+        pageSize: 50, pageIndex: 1,
+      },
+    );
+    const list = data.list ?? [];
+    const exact = list.find((a) => a.fullname === name);
+    const picked = exact ?? list[0];
+    if (!picked) throw new ApiError(`未找到费用科目"${name}"`, "NOT_FOUND");
+    return { id: picked.id, fullname: picked.fullname, usercode: picked.usercode };
+  }
 }

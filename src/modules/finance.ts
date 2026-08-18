@@ -410,6 +410,167 @@ export function createReceipt(input: CreateFinanceBillInput): Promise<CreateFina
   return createFinanceBill(RECEIPT_CONFIG, input);
 }
 
+
+// ===== 费用单 =====
+
+/** 费用单费用性质（customType） */
+export const FEE_CUSTOM_TYPES = {
+  采购: 10,
+  销售: 11,
+  管理: 12,
+  库存: 13,
+} as const;
+export type FeeCustomTypeName = keyof typeof FEE_CUSTOM_TYPES;
+
+export interface FeeLineInput {
+  /** 费用科目名（运费/佣金/手续费…） */
+  subject: string;
+  /** 金额（>0） */
+  amount: number;
+  /** 行摘要 */
+  memo?: string;
+}
+
+export interface CreateFeeBillInput {
+  /** 费用往来单位名（付款方向） */
+  party: string;
+  /** 费用性质：采购|销售|管理|库存，默认 管理 */
+  customType?: FeeCustomTypeName;
+  /** 费用科目行（至少 1 行） */
+  lines: FeeLineInput[];
+  /** 付款账户名（现金/银行存款…），默认 现金；传 none 则不登记账户（挂应付） */
+  account?: string;
+  /** 单据日期 YYYY-MM-DD，默认今天 */
+  date?: string;
+  /** 摘要 */
+  memo?: string;
+  /** false=仅保存草稿不过账（默认 true 过账） */
+  post?: boolean;
+}
+
+export interface FeeBillResult {
+  success: boolean;
+  billNumber?: string;
+  vchcode?: string;
+  total: number;
+  party: string;
+  customType: FeeCustomTypeName;
+  lines: { subject: string; amount: number; memo?: string }[];
+  account?: string;
+  posted: boolean;
+  raw?: unknown;
+}
+
+/** 创建费用单（XFY- 前缀，GeneralFee / intVchtype 4005） */
+export async function createFeeBill(input: CreateFeeBillInput): Promise<FeeBillResult> {
+  if (!input.party) throw new ApiError("费用单需指定往来单位 --party", "VALIDATION");
+  if (!input.lines?.length) throw new ApiError("至少需要一行费用（--subject/--amount 或 --lines）", "VALIDATION");
+  for (const l of input.lines) {
+    if (!l.subject) throw new ApiError("费用行缺少 subject", "VALIDATION");
+    if (!Number.isFinite(l.amount) || l.amount <= 0) throw new ApiError("费用行金额必须 > 0：" + l.subject, "VALIDATION");
+  }
+
+  const api = new JxcClient();
+  await api.init();
+
+  const customTypeName = input.customType ?? "管理";
+  const customType = FEE_CUSTOM_TYPES[customTypeName];
+
+  const party = await api.resolveSupplier(input.party);
+  const efullname = await resolveEmployeeName(api);
+
+  const template = await api.call<Record<string, unknown>>(
+    "recordsheet/finance/getBill",
+    { vchtype: "GeneralFee", businessType: "FeeNormal", customType },
+  );
+
+  // 费用科目行（paymentGrid：atypeId + atypeTotal）
+  const payment: Record<string, unknown>[] = [];
+  for (let i = 0; i < input.lines.length; i++) {
+    const line = input.lines[i];
+    const subject = await api.resolveFeeSubject(line.subject);
+    payment.push({
+      __rowIndex: i,
+      atypeId: subject.id,
+      atypeFullName: subject.fullname,
+      atypeUserCode: subject.usercode,
+      atypeTotal: line.amount,
+      currencyAtypeTotal: line.amount,
+      memo: line.memo ?? "",
+    });
+  }
+  const total = +input.lines.reduce((s, l) => s + l.amount, 0).toFixed(4);
+
+  let accountDetail: unknown[] | null = null;
+  let accountName: string | undefined;
+  if (input.account !== "none") {
+    const account = await api.resolveAccount(input.account ?? "现金");
+    accountName = account.fullname;
+    accountDetail = [buildAccountLine({
+      atypeId: account.id,
+      atypeFullName: account.fullname,
+      atypeUserCode: account.usercode,
+      total,
+      memo: input.memo,
+      rowIndex: 0,
+    })];
+  }
+
+  const posted = input.post !== false;
+  const billDateIso = input.date ? input.date + "T00:00:00.000Z" : (template.date as string) ?? todayIsoNow();
+
+  const bill = {
+    ...template,
+    vchtype: "GeneralFee",
+    intVchtype: 4005,
+    businessType: "FeeNormal",
+    billType: "finance",
+    customType,
+    oldCustomType: customType,
+    btypeId: party.id,
+    bfullname: party.name,
+    etypeId: api.employeeId,
+    efullname,
+    eshortname: efullname,
+    createEtypeId: api.employeeId,
+    createEfullname: efullname,
+    currencyBillTotal: total,
+    atypeTotal: total,
+    currencyAtypeTotal: total,
+    payment,
+    accountDetail,
+    balanceBillDetail: [],
+    summary: input.memo ?? "",
+    memo: input.memo ?? "",
+    source: "手工新增",
+    date: billDateIso,
+    postState: posted ? "PROCESS_COMPLETED" : "SAVE_ONLY",
+    oldPostState: 0,
+    saveModel: "SAVE_NEW",
+    needValidation: true,
+    balanceReverse: true,
+    currencyTurnAdvanceTotal: 0,
+    enabledPaymentTurnAdvance: 0,
+    startObjSave: { startTime: Date.now(), funcName: "主页面->财务->费用单->保存过账" },
+  };
+
+  const { json } = await api.callRaw("recordsheet/finance/submitBill/", bill);
+  const data = json?.data ?? {};
+
+  return {
+    success: json.code === "200" && data.vchcode != null,
+    billNumber: data.billNumber ?? (template.number as string),
+    vchcode: data.vchcode ?? (template.vchcode as string),
+    total,
+    party: party.name,
+    customType: customTypeName,
+    lines: input.lines.map((l) => ({ subject: l.subject, amount: l.amount, memo: l.memo })),
+    account: accountName,
+    posted,
+    raw: data,
+  };
+}
+
 // ===== 日期辅助 =====
 
 function todayStr(d: Date): string {

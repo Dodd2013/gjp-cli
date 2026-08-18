@@ -1054,6 +1054,41 @@ CLI：`gjp finance reconciliation --party <对方单位名> [--from --to] [-n �
 
 CLI：`gjp finance payment -s <供应商> --amount <金额> [-a 现金] [--memo 货款] [--date]`；`gjp finance receipt -c <客户> --amount <金额> ...`。两者都支持 `--dry-run`。
 
+
+### 12.4 费用单（来自 前端源码 jxc/recordsheet/finance/FinanceBillNew.js 逆向）★★
+
+费用单与其他财务单据共用 `finance/getBill` + `finance/submitBill/`（单据号前缀 `XFY-`）：
+
+| 项 | 值 |
+|----|----|
+| `vchtype` / `intVchtype` | `GeneralFee` / **4005** |
+| `businessType` | `FeeNormal`（普通费用）/ `FeeReimburseCommission`（报销佣金）/ `FeePrepaidAmortization`（待摊摊销） |
+| 费用性质 `customType` | 10=采购 / 11=销售 / 12=管理 / 13=库存（默认管理） |
+| `balanceReverse` | `true`（付款方向） |
+
+与收付款单的关键差异：**金额落在 `payment[]`（费用科目明细）而不是 accountDetail 的语义**：
+
+```jsonc
+{
+  "vchtype": "GeneralFee", "intVchtype": 4005, "businessType": "FeeNormal",
+  "billType": "finance", "customType": 12,
+  "btypeId": "...", "bfullname": "费用往来单位",
+  "currencyBillTotal": 100, "atypeTotal": 100,
+  "payment": [                       // 费用科目行（费用信息 paymentGrid）
+    { "atypeId":"<费用科目ID>", "atypeFullName":"快递费", "atypeUserCode":"3107",
+      "atypeTotal":100, "currencyAtypeTotal":100, "memo":"" }
+  ],
+  "accountDetail": [ { "atypeId":"<账户ID>", "total":100 } ],   // 付款账户；null=挂应付
+  "postState": "PROCESS_COMPLETED", "balanceReverse": true, ...
+}
+```
+
+- 费用科目（运费/佣金/快递费…）由 `baseinfo/atype/pagelist {parTypeId:"0000400003", stoped:0}` 解析（`typeName:"费用项目"`）。
+- 删除：`recordsheet/billCore/deleteBill {vchcode, vchtype:"GeneralFee", businessType, billDate, billPostState}`（实测有效）。
+- 同族单据（同一套接口，仅 vchtype 不同）：`OtherIncome`(4006 其他收入 QTSR-)、`TurnAccount`(4007 转账)、`ExpensePrepaidBill`(待摊费用)、`FixedAssets`(固定资产)。
+
+CLI：`gjp finance fee -p <单位> -s 快递费 --amount 100 [-t 管理] [-a 现金|none] [-l "运费:100;手续费:20"] [--no-post] [--dry-run]`（实测 2026-08-18：XFY-20260818-00004 创建+删除成功）。
+
 ---
 
 ## 13. 报表模块（来自 本月利润.har）
