@@ -75,7 +75,7 @@ const purchaseDelete = defineCommand({
   },
   async run({ args }) {
     const ref = await findPurchaseBill(args.bill as string);
-    console.log(
+    console.error(
       `⚠️  即将删除采购单 ${ref.billNumber} | 供应商 ${ref.bfullname} | 金额 ${ref.currencyBillTotal} | 日期 ${ref.billDate}`,
     );
 

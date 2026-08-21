@@ -1,367 +1,84 @@
 ---
 name: gjp
-description: 通过 gjp CLI 操作网上管家婆（wsgjp）进销存系统——开销售/采购单（含退货）、查库存、管商品、管客户/供应商、单据中心查历史单据、查应收应付/对账、收付款单、查利润报表等。
-  当用户提到「管家婆」「进销存」「开单/开销售单/开采购单」「销售退货/采购退货」「查库存/库存状况/库存明细」「新增商品/建商品」「客户/供应商/往来单位」「查单据/单据中心/历史单据」「应收/应付/对账」「付款单/收款单」「利润/报表」「出入库」「gjp」等，需要在该系统里做操作时使用。
-  前置：需已安装 gjp CLI 并执行 gjp auth login。所有命令默认输出 JSON。
+description: Use the gjp CLI to help operators work with the online Guanjiapo/Wangshang Guanjiapo inventory system through conversation. Trigger when users mention 管家婆, 网上管家婆, 进销存, gjp, 开销售单, 采购入库, 销售退货, 采购退货, 查库存, 商品, 客户, 供应商, 往来单位, 单据中心, 应收, 应付, 对账, 收款, 付款, 利润, 报表, 出入库, 删单, or ask an AI assistant to perform business operations in the system. The CLI must already be installed and authenticated with gjp auth login; business commands output JSON on stdout when successful.
 ---
 
-# 管家婆进销存操作（gjp CLI）
+# 管家婆进销存操作
 
-本 Skill 驱动 `gjp` 命令行工具操作网上管家婆云进销存系统。`gjp` 是纯 HTTP 实现的 CLI，会话本地持久化（5 小时有效，过期自动重登）。
+Use `gjp` to operate the user's real 网上管家婆进销存账套. Treat this as a live business system: query freely when useful, but make write/delete/force actions explicit and confirm them with the user.
 
-## 前置检查
+## First Step
 
-每次操作前先确认会话可用：
+Run a session check before the first business operation in a conversation:
 
 ```bash
 gjp auth status
 ```
 
-若提示「无本地会话」或「已过期」且本地无凭据，需先登录（用户自己的账号）：
+If there is no valid session and no saved credentials, ask the user to log in:
 
 ```bash
 gjp auth login -c <公司名或手机号> -u <用户名>
-# 密码会以掩码方式交互输入；凭据落盘 ~/.gjp/credentials.json（0600）
 ```
 
-会话过期时只要有保存的凭据，命令会**自动重登**，通常无需手动干预。
+Do not ask the user for their password in chat. Let the CLI prompt for it interactively.
 
-## 通用约定
+## Operating Rules
 
-- 所有业务命令**默认输出 JSON**，便于解析。失败时 `success: false` 且退出码非 0。
-- 名称类参数（仓库/客户/商品）用**中文名**即可，CLI 会自动解析成系统 ID。
-- 解析不确定时先加 `--dry-run` 看名称→ID 解析结果，不真正执行。
+- For read-only work, run the relevant command, parse the JSON, and answer in business language.
+- For write work, collect required fields, run `--dry-run` when supported, show the resolved customer/supplier/product/warehouse and amount, then ask for confirmation before creating the real document.
+- For delete work, find the document first, repeat bill number, party, date, amount, and inventory/finance impact, then require explicit user confirmation before using `--yes`.
+- For `--force`, explain the business warning first. Use it only after the user explicitly accepts the consequence, such as negative stock or bypassing a price/stock validation.
+- Keep stdout JSON parseable. If a command exits non-zero, inspect stderr and recover or explain the failure.
+- Prefer exact names from list/search commands when a name is ambiguous. Do not guess between similar customers, suppliers, products, warehouses, or accounts.
 
-## 销售（sales）
+## Intent Routing
 
-### 开销售出库单
+Use this table to map operator language to CLI actions. Read the referenced file when the task needs details.
 
-```bash
-gjp sales create \
-  -w <仓库名> \              # 可选，默认第一个仓库
-  -c <客户名> \              # 必填
-  --items '<JSON明细>' \      # 必填
-  [--memo 备注] \
-  [--date YYYY-MM-DD] \       # 默认今天
-  [--force]                   # 绕过库存不足等需确认的异常
+| User intent | Primary commands | Reference |
+| --- | --- | --- |
+| Check login/session | `gjp auth status`, `gjp auth whoami` | [troubleshooting.md](references/troubleshooting.md) |
+| Create a sales outbound bill | `gjp sales create --dry-run`, then `gjp sales create` | [operator-workflows.md](references/operator-workflows.md), [command-reference.md](references/command-reference.md) |
+| Create a sales return | `gjp sales return --dry-run`, then `gjp sales return` | [operator-workflows.md](references/operator-workflows.md) |
+| Create a purchase inbound bill | `gjp purchase create --dry-run`, then `gjp purchase create` | [operator-workflows.md](references/operator-workflows.md) |
+| Create a purchase return | `gjp purchase return --dry-run`, then `gjp purchase return` | [operator-workflows.md](references/operator-workflows.md) |
+| Query stock or warehouses | `gjp stock status`, `gjp stock position`, `gjp stock warehouses` | [command-reference.md](references/command-reference.md) |
+| Add or update products | `gjp product list`, `gjp product create`, `gjp product get` | [operator-workflows.md](references/operator-workflows.md), [command-reference.md](references/command-reference.md) |
+| Add or update customers/suppliers | `gjp customer list`, `gjp customer create`, `gjp customer contact` | [operator-workflows.md](references/operator-workflows.md), [api-notes.md](references/api-notes.md) |
+| Query bills/history | `gjp bill list`, `gjp bill types` | [command-reference.md](references/command-reference.md) |
+| Delete purchase bills | `gjp purchase delete --bill ... --yes`, optional `--force` | [safety-policy.md](references/safety-policy.md), [operator-workflows.md](references/operator-workflows.md) |
+| Query arrears/reconciliation | `gjp finance arrears`, `gjp finance reconciliation` | [operator-workflows.md](references/operator-workflows.md) |
+| Create receipt/payment | `gjp finance receipt --dry-run`, `gjp finance payment --dry-run`, then real command | [operator-workflows.md](references/operator-workflows.md), [safety-policy.md](references/safety-policy.md) |
+| Query/delete finance bills | `gjp finance list`, `gjp finance get`, `gjp finance delete --yes` | [operator-workflows.md](references/operator-workflows.md), [safety-policy.md](references/safety-policy.md) |
+| Create a fee bill | `gjp finance fee --dry-run`, then `gjp finance fee` | [operator-workflows.md](references/operator-workflows.md), [safety-policy.md](references/safety-policy.md) |
+| Query orders | `gjp order list`, `gjp order detail -b <订单号>` | [command-reference.md](references/command-reference.md) |
+| Query bill line items | `gjp bill detail -b <单据号>` | [command-reference.md](references/command-reference.md) |
+| Query profit report | `gjp report income --summary-only` | [command-reference.md](references/command-reference.md) |
+
+## Conversation Pattern
+
+For operator-facing tasks, use this loop:
+
+1. Identify whether the request is read-only, write, delete, or force.
+2. Ask only for missing business fields that cannot be inferred safely.
+3. Run lookup or `--dry-run` commands to resolve names to system records.
+4. Summarize the planned operation in plain language.
+5. Ask for explicit confirmation for write/delete/force actions.
+6. Execute the command and return the important result: bill number, amount, party, date, stock/arrears/profit values, or failure reason.
+
+Example confirmation text:
+
+```text
+我将创建一张销售出库单：客户「万达超市」，商品「可口可乐」24 瓶，单价 3.5，仓库「默认仓库」，合计 84。确认创建吗？
 ```
 
-`--items` 是商品数组，每项 `{name, qty, price}`：
-
-```bash
-gjp sales create -c 万达超市 \
-  --items '[{"name":"可口可乐","qty":24,"price":3.5},{"name":"雪碧","qty":12,"price":3.5}]' \
-  --memo "6月补货"
-```
-
-**输出**：
-```json
-{
-  "success": true,
-  "billNumber": "PXX-20260620-00010",
-  "vchcode": "1904436181773954104",
-  "total": 126.0,
-  "needsConfirm": false,
-  "exceptions": []
-}
-```
-
-**异常处理**：
-- `needsConfirm: true` + `exceptions` 含 `NEG_STOCK_ERROR` 表示库存不足等需用户确认的提示，单据已存草稿。
-- 加 `--force` 可强制保存（设 needValidation=false）。**慎用**——会绕过业务校验。
-
-**只解析不建单**（推荐先跑确认商品/客户名能匹配）：
-```bash
-gjp sales create -c 万达超市 --items '[{"name":"可口可乐","qty":1,"price":3.5}]' --dry-run
-```
-
-### 开销售退货单（客户退回商品，货入库）
-
-销售出库单的**逆向流程**：参数结构与 `sales create` 一致，但生成 `PXT-` 退货单、增加库存。
-
-```bash
-gjp sales return \
-  -w <仓库名> \              # 可选，默认第一个仓库
-  -c <客户名> \              # 必填
-  --items '<JSON明细>' \      # 必填，每项 {name, qty, price}（price 为退货单价）
-  [--memo 备注] [--date YYYY-MM-DD] [--force] [--dry-run]
-```
-```bash
-gjp sales return -c 万达超市 --items '[{"name":"可口可乐","qty":2,"price":3.5}]'
-```
-**输出**：`{success, billNumber, vchcode, total, needsConfirm, exceptions}`，单据号前缀 `PXT-`。异常处理同 `sales create`（`--force` 绕过库存等需确认的异常）。
-
-## 商品（product）
-
-### 查商品列表
-```bash
-gjp product list [-k <关键字>] [-n <条数>]     # 默认 50 条
-```
-
-### 查商品详情
-```bash
-gjp product get --id <商品ID>
-```
-
-### 新建商品
-```bash
-gjp product create \
-  -n <商品全名> -c <编号> \      # 必填；编号需唯一，重复报 5001002
-  [-u 单位] [--cost 成本价] [--sale 售价] [--retail 零售价] [--standard 规格]
-```
-例：`gjp product create -n "可口可乐1L" -c KL001 -u 瓶 --cost 3 --sale 5 --standard "1L"`
-输出：`{success, id, usercode, message}`。编号重复时 `success:false, message:"商品编号重复"`。
-
-## 客户/供应商（customer）
-
-往来单位（客户、供应商、其它）的新增、查询、停用/启用。
-
-### 查列表
-```bash
-gjp customer list [-k <关键字>] [-t customer|supplier|all] [-n <条数>] [--include-stopped]
-```
-`-t customer` 只看客户，`-t supplier` 只看供应商，默认 `all`。
-
-### 查详情（含应收/应付余额）
-```bash
-gjp customer get --id <往来单位ID>
-```
-
-### 新建客户/供应商
-```bash
-gjp customer create \
-  -n <全名> -t <customer|supplier> \   # 必填
-  [-c 编号]            # 不传则自动取 max+1
-  [-s 简称] [--category 分类名] [--contact 联系人] [--phone 电话] \
-  [--area 地区] [--address 详细地址] [--memo 备注]
-```
-例：
-```bash
-gjp customer create -n "万达超市" -t customer --phone 13800000000 --contact 王经理
-gjp customer create -n "光明批发" -t supplier --contact 李总 --phone 13900000000
-```
-输出：`{success, id, usercode, message}`。
-
-> 💡 `--phone`/`--contact`/`--area`/`--address`：电话/联系人/地址由 `customer create` 内部自动经 `deliverinfo/batchSave` 保存（会回填客户记录的电话字段），传入即生效。`--area` 格式「省/市/区/街道」。
-
-### 更新已有客户的电话/地址
-```bash
-gjp customer contact --id <ID> [--phone ...] [--contact ...] [--area ...] [--address ...]
-```
-例：`gjp customer contact --id 1904... --phone 13800138000 --contact 王经理`
-输出：`{success, deliverinfoId, message}`。
-
-### 停用 / 启用
-```bash
-gjp customer stop   --ids <ID,ID,... 或 JSON数组>
-gjp customer enable --ids <ID,ID,... 或 JSON数组>
-```
-输出：`{success, message:"已停用"|"已启用"}`。
-
-**注意**：
-- 新建往来单位会在真实系统产生数据，调试时优先用 `customer list` 确认是否已存在同名单位。
-- 客户/供应商的 `priceLevel`、`accType` 等差异由 CLI 按 `-t` 自动处理，无需手填。
-- 发货地址（deliverinfo）默认不写；往来单位本身建好即可用于开单。
-
-## 库存（stock）
-
-查库存状况（按商品汇总）、明细库存分布（按商品×库位）、仓库列表。
-
-### 查库存状况（按商品汇总）
-```bash
-gjp stock status [-k <商品关键字>] [-w <仓库名>] [--include-zero] [-n <条数>]
-```
-例：`gjp stock status -k 可口可乐`、`gjp stock status -w 默认仓库 -n 50`
-**输出**：`{total, list:[{ptypeId, fullname, shortname, usercode, unitName, standard, qty(现存量), stockQty(实物库存), saleableQty(可销售), sendableQty(可发货), transQty(在途), costTotal(成本总额), prepriceTotal(售价总额), stoped}]}`。
-
-### 查明细库存分布（按商品 + 库位）
-```bash
-gjp stock position [-k <商品关键字>] [-w <仓库名>] [-n <条数>]
-```
-**输出**：`{total, list:[{ptypeId, fullname, unitName, warehouse, batchNo, position, stockQty, qty, costTotal}]}`。
-
-### 仓库列表
-```bash
-gjp stock warehouses
-```
-**输出**：`[{id, fullname, usercode}]`。
-
-## 财务（finance）
-
-应收应付汇总、往来对账明细、付款单、收款单。
-
-### 查应收应付汇总
-```bash
-gjp finance arrears [-t customer|supplier|all] [-k <关键字>] [--include-zero] [-n <条数>]
-```
-- `-t customer` 看应收（客户欠我），`-t supplier` 看应付（我欠供应商），默认 all。
-**输出**：`{total, list:[{id, name, type, arTotal(应收), apTotal(应付), prTotal(预收), ppTotal(预付), availablePrTotal, person, tel, stoped}]}`。
-
-### 查往来对账明细（某客户/供应商的单据级明细）
-```bash
-gjp finance reconciliation --party <对方单位名> [--from YYYY-MM-DD] [--to YYYY-MM-DD] [-n <条数>]
-```
-默认本月。**输出**：`{total, list:[{billNumber, vchcode, vchtype, businessName, billDate, billTotal, settled(已核销), remain(未核销余额), summary}]}`。
-例：查某客户哪些单据还没收款 → `gjp finance reconciliation --party 万达超市`，看 `remain>0` 的行。
-
-### 创建付款单（付钱给供应商，FK- 前缀）
-```bash
-gjp finance payment -s <供应商名> --amount <金额> [-a 现金] [--memo 货款] [--date YYYY-MM-DD] [--dry-run]
-```
-`-a` 资金账户（现金/银行存款…，默认现金）。**输出**：`{success, billNumber, vchcode, amount, party, account, direction:"payment"}`。
-
-### 创建收款单（收客户钱，SK- 前缀）
-```bash
-gjp finance receipt -c <客户名> --amount <金额> [-a 现金] [--memo 货款] [--date YYYY-MM-DD] [--dry-run]
-```
-**输出**：`{success, billNumber, vchcode, amount, party, account, direction:"receipt"}`。
-
-> 💡 收付款默认**不核销具体单据**（直接冲减往来单位的应收/应付余额）。资金账户可用 `gjp finance payment -s X --amount 1 --dry-run` 查看。金额必须 >0。
-
-### 查收付款单列表
-```bash
-gjp finance list [-t payment|receipt|all] [--from --to] [--party 对方名] [--bill 单号] [-n 条数]
-```
-默认近 7 天、全部类型。`--party`/`--bill` 为客户端过滤。
-**输出**：`{total, list:[{vchcode, billNumber, vchtypeName, vchtypeEnum(Payment/Receiving), businessTypeEnum, businessTypeName, bfullname, currencyBillTotal(付款为负/收款为正), billDate, memo, summary, postState}]}`。
-
-### 查收付款单详情（账户明细）
-```bash
-gjp finance get --id <vchcode 或 FK-/SK- 单号>
-```
-**输出**：`{vchcode, vchtypeEnum, billNumber, accounts:[{atypeFullName, total, btypeFullName, memo}]}`（哪个账户收/付了多少、给/收自谁）。
-
-### 删除收付款单
-```bash
-gjp finance delete --bill <FK-/SK- 单号 或 vchcode> [--yes]
-```
-- **二次确认**：默认列出单据（单号/对方/金额/日期）并提示 `确认删除? (y/N)`；非交互环境须加 `--yes`。
-- 财务单据删除是**单次干净调用**（资金运动由核算反冲，无负库存链）。删除警告走 stderr，stdout 为纯 JSON。
-- **输出**：`{success, deleted, billNumber, vchcode, message}`。
-- 例：`gjp finance delete --bill FK-20260621-00001 --yes`
-
-> ⚠️ 删除不可逆（但会反冲该笔收付款对往来余额/资金账户的影响）。仅能删已过账（postState=800）单据。
-
-## 采购（purchase）
-
-### 开采购入库单
-
-```bash
-gjp purchase create \
-  -w <仓库名> \              # 可选，默认第一个仓库
-  -s <供应商名> \             # 必填
-  --items '<JSON明细>' \      # 必填
-  [--memo 备注] \
-  [--date YYYY-MM-DD] \       # 默认今天
-  [--force]                   # confirm:true，绕过「价格为0」等需确认异常
-```
-
-`--items` 同销售，每项 `{name, qty, price}`（price 为采购单价）：
-
-```bash
-gjp purchase create -s 光明批发 \
-  --items '[{"name":"可口可乐","qty":48,"price":2.8},{"name":"雪碧","qty":24,"price":2.8}]'
-```
-
-**输出**：与销售同结构 `{success, billNumber, vchcode, total, needsConfirm, exceptions}`，单据号前缀 `CR-`。
-
-**异常处理**（与销售不同）：
-- `needsConfirm: true` + `exceptions` 含 `COST_BATCH_ERROR`（价格为0）时，单据已存草稿；加 `--force` 置 `confirm:true` 重提即落库。
-- 采购的 `--force` 机制是 `confirm:true`（销售是 `needValidation:false`，二者不同）。
-
-**只解析不建单**：
-```bash
-gjp purchase create -s 光明批发 --items '[{"name":"可口可乐","qty":1,"price":2.8}]' --dry-run
-```
-
-### 删除采购入库单
-
-```bash
-gjp purchase delete --bill <CR-单号 或 vchcode> [--force] [--yes]
-```
-
-- **二次确认**：默认会列出单据（单号/供应商/金额/日期）并提示 `确认删除? (y/N)`；非交互环境（AI/脚本）须加 `--yes` 显式确认。
-- **负库存保护**：若删除会导致库存为负（`NEG_STOCK_ERROR`），会打印受影响商品（当前库存 → 删除后）并要求 `--force` 才能继续；`--force` 还会再确认一次。
-- 例：`gjp purchase delete --bill CR-20260620-00008 --yes`
-- 输出：`{success, deleted, billNumber, vchcode}`（强制删时多 `forced:true`）。
-
-> ⚠️ 删除是不可逆操作且影响库存/应付。仅能删已过账（postState=800）单据。草稿态单据需在网页端处理。
-
-### 开采购退货单（货退回供应商）
-
-采购入库单的**逆向流程**：参数结构与 `purchase create` 一致，但生成 `CT-` 退货单、扣减库存。
-
-```bash
-gjp purchase return \
-  -w <仓库名> \              # 可选，默认第一个仓库
-  -s <供应商名> \             # 必填
-  --items '<JSON明细>' \      # 必填，每项 {name, qty, price}（price 为退货单价）
-  [--memo 备注] \
-  [--date YYYY-MM-DD] \       # 默认今天
-  [--force]                   # confirm:true，绕过「价格为0」等需确认异常
-```
-
-```bash
-gjp purchase return -s 光明批发 \
-  --items '[{"name":"可口可乐","qty":2,"price":2.8}]'
-```
-
-**输出**：`{success, billNumber, vchcode, total, needsConfirm, exceptions}`，单据号前缀 `CT-`。
-
-**异常处理**（与 `purchase create` 相同）：`needsConfirm:true` 且 `exceptions` 含 `COST_BATCH_ERROR`（价格为0）时，加 `--force` 置 `confirm:true` 重提即落库。
-
-> ⚠️ 退货会扣减库存、产生应付红冲。优先 `--dry-run` 先核对解析出的商品/数量。CLI 暂无退货单删除命令，调试用的测试退货单需在网页端处理。
-
-## 单据中心（bill）
-
-跨单据类型查历史单据、查业务类型枚举。
-
-### 查单据列表
-```bash
-gjp bill list \
-  [--from YYYY-MM-DD] [--to YYYY-MM-DD] \   # 默认近 7 天
-  [-t purchase|sale|stock|finance|all] \    # 默认 all
-  [--party <对方单位名>] [--bill <单据号>] \  # 对方/精确单号过滤
-  [-n <条数>]                                # 默认 20
-```
-例：
-```bash
-gjp bill list                       # 近 7 天所有单据
-gjp bill list -t sale -n 10         # 仅销售单
-gjp bill list --party 唱起一上       # 某客户的单据
-gjp bill list --bill CR-20260620-00001   # 精确查一张（返回 vchcode，可衔接 purchase delete）
-```
-**输出**：`{total, list:[{billNumber, vchcode, vchtype, businessType, businessTypeName, billType, bfullname, currencyBillTotal, billDate, postTime, memo, summary}]}`。
-
-### 查业务类型枚举（vchtype 字典）
-```bash
-gjp bill types [--all]    # 默认排除已停用；--all 含全部
-```
-**输出**：`[{vchtype, name, businessType, businessCode, businessTypeEnum, stoppedInVchtype}]`。用于查「某个 businessType 对应什么单据」「某类单据的 vchtype 码」。
-
-## 报表（report）
-
-### 查利润表（本月发生额）
-```bash
-gjp report income [-p <YYYYMM>] [--summary-only]
-```
-- `-p` 期间如 `202606`，默认当前月。
-- `--summary-only` 只输出汇总（推荐，明细科目较多）。
-**输出**（summary）：`{period, revenue(收入), expense(支出), profit(利润), yearProfit(本年累计)}`。
-**输出**（完整）：额外含 `items:[{typeId, fullname, monthTotal, yearTotal, parentTypeId}]`（收入类 00003 / 支出类 00004 / 利润 等科目）。
-例：`gjp report income --summary-only` → `{period:"202606", revenue:113.8, expense:46.58, profit:67.22, yearProfit:0}`。
-
-## 使用注意
-
-- **不要随意建测试单**：每次 `sales create` 都会在真实系统产生单据。调试优先用 `--dry-run`。
-- **金额**：明细 `price` 为不含税单价，单据总额由 CLI 自动汇总。
-- **会话**：`gjp auth whoami` 可调用业务接口验证会话是否真的可用。
-
-## 故障排查
-
-| 现象 | 处理 |
-|------|------|
-| `无有效 session，且本地无凭据` | 先 `gjp auth login` |
-| `未找到仓库/客户/商品 "X"` | 名称不匹配，用 `--dry-run` 看实际能匹配到什么 |
-| `登录失败` | 检查公司名/用户名/密码；错误 ≥3 次会要求滑块验证码（CLI 暂不支持，需等冷却） |
-| 命令未找到 `gjp` | CLI 未安装，见项目 README |
+## References
+
+Load these only when needed:
+
+- [operator-workflows.md](references/operator-workflows.md): Natural-language workflows for common operator tasks.
+- [command-reference.md](references/command-reference.md): Full command parameters, outputs, and examples.
+- [safety-policy.md](references/safety-policy.md): Confirmation, `--dry-run`, delete, and `--force` rules.
+- [troubleshooting.md](references/troubleshooting.md): Login, matching, JSON, and business error recovery.
+- [api-notes.md](references/api-notes.md): Non-obvious API behavior that affects CLI usage.

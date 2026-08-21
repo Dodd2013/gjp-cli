@@ -9,7 +9,7 @@
 ## ✨ 特性
 
 - 🔐 **纯 HTTP 登录鉴权**：复刻前端 RSA 加密 + 会话管理，无需 Playwright / 浏览器自动化
-- 🤖 **AI 友好**：自带 Claude Code Skill，装上后 AI 可直接开单、查库存
+- 🤖 **AI 友好**：自带通用 AI Skill，装上后 AI 可直接开单、查库存
 - 📦 **会话持久化**：cookie/JWT 落盘，跨进程复用，过期自动重登
 - 🧩 **按名称操作**：仓库/客户/商品直接用中文名，CLI 自动解析成系统 ID
 - 📋 **JSON 输出**：所有业务命令默认输出结构化 JSON，便于脚本和 AI 解析
@@ -23,7 +23,7 @@
 3. GET `loginUrl` 换取会话 cookie（`ngp-authorization` JWT + `ngp-router`），有效期 5 小时
 4. 会话存到 `~/.gjp/session.json`，后续所有 `/jxc/` 业务接口靠它鉴权
 
-详见 [`docs/API.md`](docs/API.md)（业务接口文档）与 [`CLAUDE.md`](CLAUDE.md)（开发指南）。
+详见 [`docs/API.md`](docs/API.md)（业务接口文档）与 [`AGENTS.md`](AGENTS.md)（开发指南）。
 
 ## 📋 前置要求
 
@@ -53,19 +53,29 @@ bun link                 # 注册全局命令 gjp（需 Bun）
 
 > npm 安装的版本走 Node bundle（`dist/cli.js`）；克隆仓库开发可用 `bun run src/cli.ts` 直接跑源码。
 
-### （可选）安装 Claude Code Skill
+### （可选）安装 AI Skill
 
 让 AI 能自动调用 `gjp` 操作进销存：
 
 ```bash
-# npm 全局安装的用户：
+# Codex 用户（npm 全局安装）：
+mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills"
+ln -sf "$(npm root -g)/gjp/skill/gjp" "${CODEX_HOME:-$HOME/.codex}/skills/gjp"
+
+# Codex 用户（克隆仓库）：
+mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills"
+ln -sf "$(pwd)/skill/gjp" "${CODEX_HOME:-$HOME/.codex}/skills/gjp"
+
+# Claude Code 用户（npm 全局安装）：
+mkdir -p ~/.claude/skills
 ln -sf "$(npm root -g)/gjp/skill/gjp" ~/.claude/skills/gjp
 
-# 克隆仓库的用户：
+# Claude Code 用户（克隆仓库）：
+mkdir -p ~/.claude/skills
 ln -sf "$(pwd)/skill/gjp" ~/.claude/skills/gjp
 ```
 
-装完后，在任意 Claude Code 会话里说「用管家婆开张销售单给某某客户」，Claude 会自动触发 Skill 调用 `gjp sales create`。
+OpenClaw 或其它支持 Skills 的 AI 工具，也可把同一个 `skill/gjp` 目录软链到该工具的 skills 目录。装完后，在 AI 会话里说「用管家婆开张销售单给某某客户」，AI 助理即可按 Skill 调用 `gjp sales create`。
 
 ## ⚡ 快速开始
 
@@ -130,13 +140,13 @@ gjp sales create \
 ### 待实现
 
 - 📦 库存盘点（`gjp stock ...`）
-- 📊 报表（`gjp report ...`）
+- 🔁 单据红冲
 
-> 已实现：销售出库、采购入库/退货/删除、商品 CRUD、往来单位 CRUD、单据中心查询。各命令完整参数与 JSON 输出结构见 [`skill/gjp/SKILL.md`](skill/gjp/SKILL.md) 与 [`CLAUDE.md`](CLAUDE.md)。
+> 已实现：销售出库/退货、采购入库/退货/删除、商品 CRUD、往来单位 CRUD、库存查询、财务应收应付/对账/收付款/查删、单据中心查询、利润报表。各命令完整参数与 JSON 输出结构见 [`skill/gjp/SKILL.md`](skill/gjp/SKILL.md)。
 
 ## 🤖 给 AI 用（Skill）
 
-本项目自带 [`skill/gjp/SKILL.md`](skill/gjp/SKILL.md)，安装后 Claude Code 会话可自动识别进销存操作意图并调用 `gjp`：
+本项目自带 [`skill/gjp/SKILL.md`](skill/gjp/SKILL.md)，安装到 Codex、Claude Code、OpenClaw 或其它支持 Skills 的 AI 工具后，会话可自动识别进销存操作意图并调用 `gjp`：
 
 - 用户说「管家婆开单」「查库存」「进销存」等关键词时触发
 - AI 会先 `gjp auth status` 检查会话，再执行对应命令
@@ -157,11 +167,11 @@ gjp-cli/
 │   │   ├── sales.ts
 │   │   └── templates/             # HAR 提炼的单据模板
 │   └── cli.ts                     # citty 命令入口
-├── skill/gjp/SKILL.md             # Claude Code Skill（配套分发）
+├── skill/gjp/SKILL.md             # 通用 AI Skill（配套分发）
 ├── docs/
 │   ├── API.md                     # 业务接口文档（逆向整理）
 │   └── implementation-plan.html   # 方案网页
-├── CLAUDE.md                      # 开发指南 + 工作方法论
+├── AGENTS.md                      # 开发指南 + 工作方法论
 └── README.md
 ```
 
@@ -173,11 +183,11 @@ gjp-cli/
 HAR 抓包 ─jq 提取─▶ docs/API.md ─封装─▶ src/modules/*.ts + cli.ts ─登记─▶ skill/gjp/SKILL.md
 ```
 
-1. **HAR → API 文档**：用浏览器在系统里操作一遍并导出 HAR，用 [`CLAUDE.md`](CLAUDE.md) 里的标准 `jq` 命令提取接口，追加到 `docs/API.md`
+1. **HAR → API 文档**：用浏览器在系统里操作一遍并导出 HAR，用 [`AGENTS.md`](AGENTS.md) 里的标准 `jq` 命令提取接口，追加到 `docs/API.md`
 2. **API → CLI**：业务模块统一用 `getAuthenticatedClient()` 取已认证 client，封装成 `gjp <module> <action>`
 3. **CLI → Skill**：把新命令登记进 `skill/gjp/SKILL.md` 对应章节
 
-完整方法论、关键经验（如单据明细行用 HAR 模板克隆、CONFIRM 异常处理）都写在 [`CLAUDE.md`](CLAUDE.md)。
+完整方法论、关键经验（如单据明细行用 HAR 模板克隆、CONFIRM 异常处理）都写在 [`AGENTS.md`](AGENTS.md)。
 
 ## 🔒 安全
 
