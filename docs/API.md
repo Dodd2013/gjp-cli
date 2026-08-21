@@ -421,7 +421,6 @@ gjp sales create \
 | ~~采购入库~~ | ~~新建采购单~~ | ✅ 已实现（见 §9，vchtype=Buy） |
 | ~~库存查询~~ | ~~库存状况/明细分布~~ | ✅ 已实现（见 §11，`analysiscloud/inventorySituation|inventoryBatch`） |
 | ~~财务收付款~~ | ~~收款单/付款单~~ | ✅ 已实现（见 §12，`finance/getBill`+`finance/submitBill`） |
-| ~~财务单据查删~~ | ~~收付款单查询/详情/删除~~ | ✅ 已实现（见 §12.4~12.6，`financeBillQuery`+`billCore/deleteBill accountBill:true`） |
 | ~~往来应收应付~~ | ~~应收应付汇总/对账~~ | ✅ 已实现（见 §12，`analysiscloud/btypeAnalyse|accountReconciliation`） |
 | ~~利润报表~~ | ~~利润表~~ | ✅ 已实现（见 §13，`accounting/incomeReport`） |
 | ~~销售退货~~ | ~~销售退货单~~ | ✅ 已实现（见 §14，vchtype=SaleBack） |
@@ -1057,7 +1056,44 @@ CLI：`gjp finance reconciliation --party <对方单位名> [--from --to] [-n �
 
 CLI：`gjp finance payment -s <供应商> --amount <金额> [-a 现金] [--memo 货款] [--date]`；`gjp finance receipt -c <客户> --amount <金额> ...`。两者都支持 `--dry-run`。
 
-### 12.4 收付款单查询 `POST /jxc/recordsheet/financeBillQuery/financebillquerylist` ★★
+
+### 12.4 费用单（来自 前端源码 jxc/recordsheet/finance/FinanceBillNew.js 逆向）★★
+
+费用单与其他财务单据共用 `finance/getBill` + `finance/submitBill/`（单据号前缀 `XFY-`）：
+
+| 项 | 值 |
+|----|----|
+| `vchtype` / `intVchtype` | `GeneralFee` / **4005** |
+| `businessType` | `FeeNormal`（普通费用）/ `FeeReimburseCommission`（报销佣金）/ `FeePrepaidAmortization`（待摊摊销） |
+| 费用性质 `customType` | 10=采购 / 11=销售 / 12=管理 / 13=库存（默认管理） |
+| `balanceReverse` | `true`（付款方向） |
+
+与收付款单的关键差异：**金额落在 `payment[]`（费用科目明细）而不是 accountDetail 的语义**：
+
+```jsonc
+{
+  "vchtype": "GeneralFee", "intVchtype": 4005, "businessType": "FeeNormal",
+  "billType": "finance", "customType": 12,
+  "btypeId": "...", "bfullname": "费用往来单位",
+  "currencyBillTotal": 100, "atypeTotal": 100,
+  "payment": [                       // 费用科目行（费用信息 paymentGrid）
+    { "atypeId":"<费用科目ID>", "atypeFullName":"快递费", "atypeUserCode":"3107",
+      "atypeTotal":100, "currencyAtypeTotal":100, "memo":"" }
+  ],
+  "accountDetail": [ { "atypeId":"<账户ID>", "total":100 } ],   // 付款账户；null=挂应付
+  "postState": "PROCESS_COMPLETED", "balanceReverse": true, ...
+}
+```
+
+- 费用科目（运费/佣金/快递费…）由 `baseinfo/atype/pagelist {parTypeId:"0000400003", stoped:0}` 解析（`typeName:"费用项目"`）。
+- 删除：`recordsheet/billCore/deleteBill {vchcode, vchtype:"GeneralFee", businessType, billDate, billPostState}`（实测有效）。
+- 同族单据（同一套接口，仅 vchtype 不同）：`OtherIncome`(4006 其他收入 QTSR-)、`TurnAccount`(4007 转账)、`ExpensePrepaidBill`(待摊费用)、`FixedAssets`(固定资产)。
+
+CLI：`gjp finance fee -p <单位> -s 快递费 --amount 100 [-t 管理] [-a 现金|none] [-l "运费:100;手续费:20"] [--no-post] [--dry-run]`（实测 2026-08-18：XFY-20260818-00004 创建+删除成功）。
+
+---
+
+### 12.8 收付款单查询 `POST /jxc/recordsheet/financeBillQuery/financebillquerylist` ★★
 
 按日期/类型查已过账（postState=800）的收付款单。
 
@@ -1083,7 +1119,7 @@ CLI：`gjp finance payment -s <供应商> --amount <金额> [-a 现金] [--memo 
 
 CLI：`gjp finance list [-t payment|receipt|all] [--from --to] [--party 对方] [--bill 单号] [-n 条数]`。
 
-### 12.5 收付款单详情 `POST /jxc/recordsheet/financeBillQuery/getDetail` ★
+### 12.9 收付款单详情 `POST /jxc/recordsheet/financeBillQuery/getDetail` ★
 
 ```jsonc
 { "vchcode": "1905...", "vchtype": "Payment", "queryPostState": 800 }
@@ -1093,7 +1129,7 @@ CLI：`gjp finance list [-t payment|receipt|all] [--from --to] [--party 对方] 
 
 CLI：`gjp finance get --id <vchcode 或 FK-/SK- 单号>`。
 
-### 12.6 删除收付款单 `POST /jxc/recordsheet/billCore/deleteBill` ★★★
+### 12.10 删除收付款单 `POST /jxc/recordsheet/billCore/deleteBill` ★★★
 
 与采购单删除（§9.4）**同一接口**，差异：
 
@@ -1117,7 +1153,7 @@ CLI：`gjp finance get --id <vchcode 或 FK-/SK- 单号>`。
 
 CLI：`gjp finance delete --bill <FK-/SK- 单号 或 vchcode> [--yes]`。**二次确认**：默认打印单据信息并提示 `确认删除? (y/N)`，非交互环境须 `--yes`。删除警告走 stderr，stdout 保持纯 JSON。
 
-### 12.7 业务流程示例：删除一张付款单
+### 12.11 业务流程示例：删除一张付款单
 
 ```
 1. financeBillQuery/financebillquerylist {vchtypes:[4001,4002,...]}  → 按单号定位，取 vchcode/billDate/postState/vchtypeEnum/businessTypeEnum
@@ -1205,3 +1241,136 @@ CLI：`gjp report income [-p 202606] [--summary-only]`（`--summary-only` 只输
 ```
 
 CLI：`gjp sales return -c <客户> --items '<JSON>' [-w 仓库] [--memo] [--date] [--force] [--dry-run]`。
+
+---
+
+## 15. 订单模块 `recordsheet/orderBillCore` + `recordsheet/orderBill`
+
+> 2026-08-14 从网页前端静态资源逆向 + 实测验证（来源：`/jxc/recordsheet/stock/SupplyMarketingBillNew.js`、`/jxc/recordsheet/selector/OrderBillSelector.js`）。
+> 订单（销售订单/采购订单/报价单/询价单）是独立于出入库单据的单据族，**不在** `postBill/listPostBill` 和 `goodsBill/*` 里。
+
+### 15.1 订单 vchtype 码（orderBillCore/list 的 `vchtypes` 过滤值）
+
+| vchtype | 枚举名 | 含义 |
+|---------|--------|------|
+| 9000 | BuyOrder | 采购订单 |
+| 9001 | SaleOrder | 销售订单 |
+| 9003 | Quotation | 报价单 |
+| 9004 | InQuiry | 询价单 |
+| 9005 | GoodsTrans | 调拨单 |
+| 9006 | ProductionPlan | 生产计划单 |
+| 9007 | ProductionTaskOrder | 生产任务单 |
+
+**auditState（订单审核状态）**：`1` 待提交 · `2` 待审核 · `3` 审核中 · `4` 已驳回 · `5` 已审核 · `6` 已完成。
+**overState（完成状态）**：`0` 未完成 · `1` 已完成 · `2` ? · `3` 部分完成（前端选单器默认查 `[0,3]`）。
+
+### 15.2 订单列表 `recordsheet/orderBillCore/list`
+
+```jsonc
+// POST https://<apiBase>/jxc/recordsheet/orderBillCore/list
+{
+  "pageIndex": 1,
+  "pageSize": 20,
+  "queryParams": {
+    "vchtypes": [9001],              // 见 15.1
+    "auditStateList": [5],           // 不能为空（前端校验"订单状态不能为空!"）
+    "overStateList": [0, 3],
+    "startTime": "2026-08-10 00:00:00",
+    "endTime": "2026-08-10 23:59:59",
+    "businessTypeList": [201],       // 201=普通销售（同 goodsBill businessType 字典）
+    "dateType": 0,                   // 0=按单据时间 1=按交货时间（改用 toDateStart/toDateEnd）
+    "btypeId": "",                   // 可选：客户过滤
+    "queryOnlyUnFinishDetail": false,
+    "gridFilter": []                 // 可选：列过滤（{dataField, value}）
+    // 可选：etypeId 经手人 / ktypeId 仓库 / ptypeId 商品 / number 单号模糊
+  }
+}
+```
+
+**响应** `data.list[]` 关键字段：`billNumber`（前缀 `PXXD-`）· `vchcode` · `vchtype` · `vchtypeName`（"销售订单"）· `billBusinessTypeName` · `btypeId` · `bfullname`（客户）· `currencyBillTotal` · `auditState` · `overState` · `billDate` · `todate`（交货日期）· `summary` · `memo`。
+
+> 实测：日期字符串带不带时区均可（`2026-08-10T00:00:00+08:00` 与 `2026-08-10 00:00:00` 等价）。单号前缀注意：销售订单与销售出库单共用 `PXXD-` 前缀（出库单 summary 里"由销售订单：PXXD-xxx 生成"可区分）。
+
+### 15.3 订单详情（含商品行）`recordsheet/orderBill/getBill`
+
+```jsonc
+// POST
+{ "vchcode": "<订单vchcode>", "vchtype": "SaleOrder", "show": true, "queryOnlyUnFinishDetail": false }
+```
+
+**响应** `data`：单头（`billNumber`/`bfullname`/`kfullname`/`currencyBillTotal`/`todate`…）+ `data.detail[]` 商品行。
+行关键字段：`pFullName`（品名）· `standard`（规格）· `qty` · `unitName` · `currencyPrice` · `currencyTotal`。
+
+> 实测验证：PXXD-20260810-00124（陈林美，6 元）→ detail[0] = 120冰白珠光葵心 787*1092，5 张 × 1.2。
+
+### 15.4 订单转出库单（生单）流程
+
+```jsonc
+// ① 整单预检（实测可用）
+POST recordsheet/orderBill/checkBill
+{ "createType": 4, "vchcodeList": ["<订单vchcode>"], "createVchtype": "Sale", "fromVchtype": "SaleOrder" }
+// → code 200 且 data 为 null / 无异常时可通过
+
+// ② 按明细挑行生成（前端 OrderBillSelector 走这条）
+POST recordsheet/orderBill/checkBillByDetail
+{ ...订单行数据, "detailIdList": ["<明细ID列表>"], "newDetailList": [...], "createVchtype": "Sale" }
+
+// ③ 真正生成
+POST recordsheet/orderBill/selectDetailCreateBill
+{ ...同②, "createVchtype": "Sale" }
+// → data.createCount / 生成的单据 vchcode
+```
+
+### 15.5 其他订单接口（前端确认存在，未逐一实测）
+
+| 接口 | 用途 |
+|------|------|
+| `orderBill/submitBill` | 保存/修改订单（结构类似 goodsBill/submitBill，单头+detail） |
+| `orderBill/delete` + `orderBill/checkDelete` | 删除订单 / 删除预检 |
+| `orderBill/isBillExist` | 订单是否存在（注意：在 apiBase 域名下 404，可能挂在 ngpkj 主站） |
+| `orderBill/listOrderBillDetail` | 按明细跨订单查询（参数同 15.2 + gridFilter） |
+| `orderBillCore/listDetailIds` | 取订单明细 ID 集合 |
+| `orderBill/showdownOrder` / `checkshowDownBill` | 订单下推/查询下推结果 |
+| `orderBill/getOrderOccupyAdvanceTotal` | 订单占用订金 |
+
+## 16. 单据状态与审核 `recordsheet/billStatus` + `billAudit`
+
+> 同日实测。**vchtype 传字符串枚举**（"Sale"），不是数字。
+
+### 16.1 单据状态检查 `recordsheet/billStatus/billStatus`
+
+```jsonc
+// POST
+{ "vchcode": "<单据vchcode>", "checkType": "ALL", "vchtype": "Sale", "updateTime": "<单据updateTime>" }
+// → { "code": "200", "data": { "billChangeStatus": "NONE" | "DELETED" | ... } }
+```
+
+用途：编辑/删除前的乐观锁检查——单据被他人改动/删除时 `billChangeStatus != "NONE"`。
+注意：`vchcode` 传数字型字符串；`vchtype` 必须是 `"Sale"` 这类枚举字符串，传数字 2000 返回空体。
+
+### 16.2 审核相关（前端确认存在）
+
+| 接口 | 用途 |
+|------|------|
+| `billAudit/checkAuditEnable` | 检查单据是否可审核 |
+| `billAudit/antiAuditBill` | 反审核（撤回已审核单据） |
+
+## 17. 已过账单据商品明细 `recordsheet/goodsBill/getBillByVchcode`（EXISTED 模式补充）
+
+原有文档已记录 `copyTypeEnum:"DEFAULT"`（模板模式）。补充：**直接取已存在单据的完整明细**也走同一接口，参数相同：
+
+```jsonc
+{ "vchcode": "<已过账单据vchcode>", "vchtype": "Sale", "businessType": "SaleNormal", "copyTypeEnum": "DEFAULT" }
+```
+
+- `outDetail[]`（出库方向）/ `inDetail[]`（入库方向）商品行：`pFullName` · `standard` · `qty` · `unitName` · `currencyPrice` · `currencyTotal` · `costPrice`（成本）等 196 字段。
+- 单头另有 `postState`（800=已过账）· `bfullname` · `kfullname` · `summary`。
+- 配合 `postBill/listPostBill` 先拿 vchcode，再调本接口取商品行——即 `gjp bill detail` 的两步实现。
+
+## 18. 前端静态资源逆向方法（备忘）
+
+1. 前端入口 `<apiBase>/main.html` → `<script src="shell/js/init.js">`（菜单/权限键）
+2. 页面文件 `.gspx` 是 XML 描述，`ActionType="xxx, 路径.js"` 指向业务 JS
+3. 业务 JS（如 `SupplyMarketingBillNew.js` 1.7MB）内明文含所有 `jxc/recordsheet/...` 接口地址、参数结构、枚举值
+4. `res.js` 内 `window.$enum` 含全局枚举（BillTypes：10采购 20销售 30库存 40财务 **90准备单据(订单族)** 100报价 101询价 102其他）
+5. 静态资源网关路径：`/menus/*.js` 会 500，但 `/jxc/**.gspx` `/jxc/**.js` `/shell/**` 均可直接 GET

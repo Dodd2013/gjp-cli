@@ -1,5 +1,6 @@
 /**
- * 财务模块命令：arrears（应收应付汇总）/ reconciliation（对账明细）/ payment（付款单）/ receipt（收款单）。
+ * 财务模块命令：arrears（应收应付汇总）/ reconciliation（对账明细）/ payment（付款单）/ receipt（收款单）
+ * / fee（费用单）/ list（收付款单查询）/ get（详情）/ delete（删单）。
  */
 import { defineCommand } from "citty";
 import {
@@ -11,8 +12,11 @@ import {
   getFinanceBillDetail,
   findFinanceBill,
   deleteFinanceBill,
+  createFeeBill,
   type ArrearsKind,
   type FinanceBillType,
+  type FeeLineInput,
+  type FeeCustomTypeName,
 } from "../modules/finance.ts";
 import { readConfirm } from "../prompt.ts";
 import { output, die } from "./shared.ts";
@@ -203,8 +207,74 @@ const financeDelete = defineCommand({
   },
 });
 
+/** 解析费用行参数：--subject/--amount 单行，或 --lines '科目:金额[:备注];科目:金额' */
+function parseFeeLines(args: Record<string, unknown>): FeeLineInput[] {
+  const lines: FeeLineInput[] = [];
+  if (args.lines) {
+    for (const part of String(args.lines).split(";")) {
+      const seg = part.split(":").map((x) => x.trim());
+      if (seg.length < 2) die(`--lines 格式：科目:金额[:备注]，收到 "${part}"`);
+      const amount = Number(seg[1]);
+      if (!Number.isFinite(amount) || amount <= 0) die(`--lines 金额必须 > 0：${seg[0]}`);
+      lines.push({ subject: seg[0], amount, memo: seg[2] });
+    }
+  }
+  if (args.subject) {
+    if (!args.amount) die("使用 --subject 时必须同时传 --amount");
+    lines.push({ subject: String(args.subject), amount: Number(args.amount) });
+  }
+  return lines;
+}
+
+const financeFee = defineCommand({
+  meta: { name: "fee", description: "创建费用单（XFY- 前缀，费用科目+付款账户，过账冲往来/费用）" },
+  args: {
+    party: { type: "string", description: "费用往来单位名（必填，付款方向）", alias: "p", required: true },
+    subject: { type: "string", description: "费用科目名（单行：运费/佣金/手续费…）", alias: "s" },
+    amount: { type: "string", description: "费用金额（与 --subject 搭配）" },
+    lines: { type: "string", description: "多行费用，格式 科目:金额[:备注];科目:金额（与 --subject 二选一）", alias: "l" },
+    type: { type: "string", description: "费用性质：采购|销售|管理|库存（默认 管理）", alias: "t" },
+    account: { type: "string", description: "付款账户名（现金/银行存款…，默认 现金；none=挂应付不付款）", alias: "a" },
+    memo: { type: "string", description: "摘要" },
+    date: { type: "string", description: "单据日期 YYYY-MM-DD（默认今天）" },
+    "no-post": { type: "boolean", description: "仅保存草稿，不过账" },
+    "dry-run": { type: "boolean", description: "仅解析名称→ID，不真正建单" },
+  },
+  async run({ args }) {
+    const lines = parseFeeLines(args);
+    const customType = (args.type as FeeCustomTypeName | undefined) ?? "管理";
+    if (!["采购", "销售", "管理", "库存"].includes(customType)) die("--type 只能是 采购|销售|管理|库存");
+    if (!lines.length) die("需要 --subject/--amount 或 --lines 指定费用行");
+
+    if (args["dry-run"]) {
+      const { JxcClient } = await import("../api/client.ts");
+      const api = new JxcClient();
+      await api.init();
+      const resolved = [];
+      for (const l of lines) resolved.push({ line: l, subject: await api.resolveFeeSubject(l.subject) });
+      const party = await api.resolveSupplier(String(args.party));
+      let account: unknown = "(挂应付)";
+      if (args.account !== "none") account = await api.resolveAccount(String(args.account ?? "现金"));
+      output({ party, account, customType, resolved });
+      return;
+    }
+
+    const result = await createFeeBill({
+      party: String(args.party),
+      customType,
+      lines,
+      account: args.account as string | undefined,
+      memo: args.memo as string | undefined,
+      date: args.date as string | undefined,
+      post: !args["no-post"],
+    });
+    output(result);
+    if (!result.success) process.exit(1);
+  },
+});
+
 export const financeGroup = defineCommand({
-  meta: { name: "finance", description: "财务模块（应收应付 / 对账 / 付款单 / 收款单 / 查删单据）" },
+  meta: { name: "finance", description: "财务模块（应收应付 / 对账 / 付款单 / 收款单 / 费用单 / 查删单据）" },
   subCommands: {
     arrears: financeArrears,
     reconciliation: financeReconciliation,
@@ -213,5 +283,6 @@ export const financeGroup = defineCommand({
     list: financeList,
     get: financeGet,
     delete: financeDelete,
+    fee: financeFee,
   },
 });

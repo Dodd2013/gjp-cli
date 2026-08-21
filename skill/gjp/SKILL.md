@@ -23,6 +23,8 @@ gjp auth login -c <公司名或手机号> -u <用户名>
 
 Do not ask the user for their password in chat. Let the CLI prompt for it interactively.
 
+**多账套账号**：若账号拥有多个产品账套（produtId），登录时自动列出并选择；可用 `GJP_PRODUCT_ID` 环境变量或 `~/.gjp/product-id` 文件固定账套（存数字 ID，如 `88`），否则默认选第一个并在 stderr 提示。账套实际 API 域名登录后自动写入 `~/.gjp/api-base`（部分账套不在 ngpkj 主站，如 ngpd5kj.wsgjp.com.cn），业务请求自动走该域名。详见 [troubleshooting.md](references/troubleshooting.md)。
+
 ## Operating Rules
 
 - For read-only work, run the relevant command, parse the JSON, and answer in business language.
